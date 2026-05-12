@@ -1378,14 +1378,14 @@ function startPolling(id) {
   const textarea = document.getElementById('result-text-' + id);
   if (textarea) textarea.value = '';
   let count = 0;
-  const maxCount = 30;
+  const maxCount = 60;
 
   pollTimers[id] = setInterval(() => {
     count++;
     if (count > maxCount) {
       stopPolling(id);
       const ta = document.getElementById('result-text-' + id);
-      if (ta && !ta.value) ta.value = '【超时】60秒内未收到影刀回传数据';
+      if (ta && !ta.value) ta.value = '【超时】120秒内未收到影刀回传数据';
       return;
     }
     fetch('/poll_result/' + id)

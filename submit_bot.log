@@ -1,0 +1,36 @@
+2026-05-12 16:56:01,322 [INFO] 开始单条提交...
+2026-05-12 16:56:01,418 [INFO] 响应: {
+  "info": "请求成功",
+  "prompt": "NORMAL",
+  "result": {
+    "channelName": null,
+    "clueoPerationType": null,
+    "courseType": null,
+    "createdAt": null,
+    "createdBy": null,
+    "gender": null,
+    "id": null,
+    "serviceOwnerName": null,
+    "trueName": null,
+    "weChatUser": null
+  },
+  "status": 0
+}
+2026-05-12 16:56:31,101 [INFO] 开始单条提交...
+2026-05-12 16:56:31,185 [INFO] 响应: {
+  "info": "请求成功",
+  "prompt": "NORMAL",
+  "result": {
+    "channelName": null,
+    "clueoPerationType": null,
+    "courseType": null,
+    "createdAt": null,
+    "createdBy": null,
+    "gender": null,
+    "id": null,
+    "serviceOwnerName": null,
+    "trueName": null,
+    "weChatUser": null
+  },
+  "status": 0
+}

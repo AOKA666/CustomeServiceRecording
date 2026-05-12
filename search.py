@@ -2,6 +2,15 @@ import requests
 import json
 import openpyxl
 import sys
+import os
+
+
+# 获取当前脚本所在目录
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 拼接 Excel 路径
+excel_path = os.path.join(base_dir, "紧急联系人.xlsx")
+cookie_path = os.path.join(base_dir, "Cookie.txt")
 
 auth = open('C:/Users/18441/Desktop/客服记录台/Cookie.txt').read()
 
@@ -34,21 +43,36 @@ json_data = {
 response = requests.post('https://apigateway.gaodun.com/solon/api/v1/clues/global-quick-search', headers=headers, json=json_data)
 data = json.loads(response.text)
 
+result_list = data["result"]["list"]
+target_project = sys.argv[2]
+
+# 在列表中查找 intentProjectName == sys.argv[2] 的条目
+matched = None
+if len(result_list) > 1:
+    for item in result_list:
+        if item["intentProjectName"].strip() == target_project:
+            matched = item
+            break
+else:
+    matched = result_list[0] if result_list else None
+
+if matched is None:
+    print("查不到")
+    sys.exit()
+
 # 老师
-owner_name = data["result"]["list"][0]["ownerName"]
+owner_name = matched["ownerName"]
 real_name = owner_name.split("-")[-1]
 
 # 项目
-intent_project = data["result"]["list"][0]["intentProjectName"].strip()
+intent_project = matched["intentProjectName"].strip()
 
-# 如果 real_name 为空 或者 等于“新海”，走Excel查找
+# 如果 real_name 为空 或者 等于"新海"，走Excel查找
 if not real_name or real_name == "新海":
     try:
-        # 打开同文件夹下的 紧急联系人.xlsx
-        wb = openpyxl.load_workbook("紧急联系人.xlsx")
+        wb = openpyxl.load_workbook(excel_path)
         ws = wb.active
 
-        # 遍历A列，查找 intent_project
         emergency_name = None
         for row in range(1, ws.max_row + 1):
             a_value = ws.cell(row=row, column=1).value
@@ -56,13 +80,11 @@ if not real_name or real_name == "新海":
                 emergency_name = ws.cell(row=row, column=2).value
                 break
 
-        # 赋值并输出
         if emergency_name:
             real_name = str(emergency_name).strip()
-            print(f"线索老师不存在!")
         else:
-            print(f"未找到【{intent_project}】对应的紧急联系人")
-            
+            real_name = "查不到"
+
     except Exception as e:
         print(f"读取Excel失败：{str(e)}")
 
