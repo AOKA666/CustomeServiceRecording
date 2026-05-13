@@ -1,3 +1,5 @@
 {
-  "yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run"
+  "yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run",
+  "auth_token": "Basic eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkYXRhIjoiIiwiZXhwIjoxNzc5MTgwNDg2LCJqdGkiOiJiYTdkYzU2OC0xYmNmLTRmMTgtYTg3Mi1hMTk0ZDVhOTYzOGQiLCJpYXQiOjE3Nzg1NzU2ODYsImlzcyI6IjIwMDQwOSJ9.m23qy_koNhJzlFuYkhei_0c9CE68PBIGQ0KyF03c8bQ",
+  "cookie": "acw_tc=781bad1c17785758105975288eef7e80dce22d67d948e600b3d4a33dedb4a4;JSESSIONID=5C3C26895D04ACB909D56F471F1A7863;"
 }

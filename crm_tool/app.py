@@ -32,10 +32,18 @@ def save_to_excel(row_data):
     return True
 
 def load_config():
+    defaults = {
+        "yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run",
+        "auth_token": "",
+        "cookie": ""
+    }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run"}
+            data = json.load(f)
+        for k, v in defaults.items():
+            data.setdefault(k, v)
+        return data
+    return defaults
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -162,6 +170,408 @@ PROVINCE_CITY_MAP = {
     "宁夏回族自治区": ["银川市", "石嘴山市", "吴忠市", "固原市", "中卫市"],
     "新疆维吾尔自治区": ["乌鲁木齐市", "克拉玛依市", "吐鲁番市", "哈密市", "昌吉回族自治州", "博尔塔拉蒙古自治州", "巴音郭楞蒙古自治州", "阿克苏地区", "克孜勒苏柯尔克孜自治州", "喀什地区", "和田地区", "伊犁哈萨克自治州", "塔城地区", "阿勒泰地区", "石河子市", "阿拉尔市", "图木舒克市", "五家渠市", "北屯市", "铁门关市", "双河市", "可克达拉市", "昆玉市", "胡杨河市", "新星市"]
 }
+
+
+GAODUN_BASE_URL = "https://apigateway.gaodun.com"
+GAODUN_SUBMIT_ENDPOINT = "/solon/api/v1/online-consultation/add-new"
+GAODUN_REGIONS_ENDPOINT = "/prm/api/v1/regions/sub/get"
+GAODUN_PROJECTS_ENDPOINT = "/solon/api/v1/authority/projects/without-conflict-projects"
+GAODUN_CHANNELS_ENDPOINT = "/solon/api/v1/channel/online/get-channels"
+GAODUN_SCOPE_ENDPOINT = "/solon/api/v1/online-consultation/get-online-user-scope"
+DEFAULT_400_MARKET_CHANNEL_ID = 4583
+
+PROJECT_TAG_RULES = {
+    "公务员": {
+        "kind": "scope_lookup",
+        "result_index": 2,
+        "match_by": "short_name",
+        "fallback_name": "未知",
+        "tag_template": {
+            "tagCode": 12308048,
+            "tagName": "省份",
+            "checkStatus": True,
+            "typeId": 12308,
+            "singleChoice": 1,
+        },
+    },
+    "银行招聘考试": {
+        "kind": "scope_lookup",
+        "result_index": 3,
+        "match_by": "project_tag",
+        "tag_template": {
+            "tagCode": 1300001540,
+            "tagName": "咨询意向-银行招聘考试",
+            "checkStatus": True,
+            "typeId": 12308,
+            "singleChoice": 0,
+        },
+    },
+    "学位教育": {
+        "kind": "scope_lookup",
+        "result_index": 0,
+        "match_by": "project_tag",
+        "tag_template": {
+            "tagCode": 12308073,
+            "tagName": "咨询意向-大职研",
+            "checkStatus": True,
+            "typeId": 12308,
+            "singleChoice": 0,
+        },
+    },
+    "CFA": {
+        "kind": "scope_lookup",
+        "result_index": 0,
+        "match_by": "project_tag",
+        "tag_template": {
+            "tagCode": 12308034,
+            "tagName": "咨询意向-金融",
+            "checkStatus": True,
+            "typeId": 12308,
+            "singleChoice": 0,
+        },
+    },
+    "证券从业": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 12308081,
+                "tagName": "领取资料12月",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 4592, "objectId": None, "tagsId": 12308081,
+                     "tagsValueCode": 4592, "tagsValueName": "证券从业意向"}
+                ],
+            }
+        ],
+    },
+    "中级职称": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 12308153,
+                "tagName": "中级通用-数据质量",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 4857, "objectId": None, "tagsId": 12308153,
+                     "tagsValueCode": 4857, "tagsValueName": "正常数据-含未建联"}
+                ],
+            }
+        ],
+    },
+    "CPA": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 12308154,
+                "tagName": "CPA通用-数据质量",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 4867, "objectId": None, "tagsValueCode": 4867,
+                     "tagsValueName": "正常数据-含未建联", "checkStatus": True}
+                ],
+            },
+            {
+                "tagCode": 1300037875,
+                "tagName": "咨询意向-CPA",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 5461, "objectId": None, "tagsValueCode": 5461,
+                     "tagsValueName": "高顿CPA意向", "checkStatus": True}
+                ],
+            },
+        ],
+    },
+    "保研": {
+        "kind": "scope_lookup",
+        "result_index": 5,
+        "match_by": "project_tag",
+        "tag_template": {
+            "tagCode": 1300077667,
+            "tagName": "咨询意向-保研",
+            "checkStatus": True,
+            "typeId": 12308,
+            "singleChoice": 1,
+        },
+    },
+    "高级会计职称": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 1300076002,
+                "tagName": "高会通用-数据质",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 5608, "objectId": None, "tagsId": 1300076002,
+                     "tagsValueCode": 5608, "tagsValueName": "正常数据-含未建联"}
+                ],
+            }
+        ],
+    },
+    "税务师": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 12308152,
+                "tagName": "税务师通用-数据质量",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 4847, "objectId": None, "tagsId": 12308152,
+                     "tagsValueCode": 4847, "tagsValueName": "正常数据-含未建联"}
+                ],
+            }
+        ],
+    },
+    "中级经济师": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 1300000816,
+                "tagName": "中级经济师通用-数据质",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 1,
+                "obTagsValueCheckedList": [
+                    {"id": 4948, "objectId": None, "tagsId": 1300000816,
+                     "tagsValueCode": 4948, "tagsValueName": "正常数据-含未建联"}
+                ],
+            }
+        ],
+    },
+}
+
+
+def parse_cookie_string(cookie_str):
+    cookies = {}
+    if not cookie_str:
+        return cookies
+    for part in cookie_str.split(';'):
+        part = part.strip()
+        if not part or '=' not in part:
+            continue
+        k, _, v = part.partition('=')
+        cookies[k.strip()] = v.strip()
+    return cookies
+
+
+def gaodun_headers(auth_token):
+    return {
+        "Accept": "application/json",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Authentication": auth_token,
+        "Content-Type": "application/json; charset=UTF-8",
+        "Origin": "https://ocrm.gaodun.com",
+        "Referer": "https://ocrm.gaodun.com/",
+        "Sec-Ch-Ua": '"Chromium";v="129", "Not=A?Brand";v="8"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/129.0.6668.101 Safari/537.36"
+        ),
+        "X-Requested-Extend": json.dumps({"systemName": "SYSTEM-OCRM"}),
+    }
+
+
+def _gaodun_get(path, params, auth_token, cookies):
+    url = GAODUN_BASE_URL + path
+    resp = requests.get(url, headers=gaodun_headers(auth_token),
+                        params=params, cookies=cookies, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _gaodun_post(path, payload, auth_token, cookies):
+    url = GAODUN_BASE_URL + path
+    resp = requests.post(url, headers=gaodun_headers(auth_token),
+                         json=payload, cookies=cookies, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def lookup_state(state_name, auth_token, cookies):
+    data = _gaodun_get(GAODUN_REGIONS_ENDPOINT,
+                       {"parentId": 18784, "level": 1}, auth_token, cookies)
+    for item in data.get("result") or []:
+        if (item.get("name") or "").strip() == state_name:
+            return item.get("id"), (item.get("shortName") or "").strip()
+    raise ValueError(f"未找到省份 '{state_name}' (state_id)")
+
+
+def lookup_city(city_name, state_id, auth_token, cookies):
+    data = _gaodun_get(GAODUN_REGIONS_ENDPOINT,
+                       {"parentId": state_id, "level": 2}, auth_token, cookies)
+    for item in data.get("result") or []:
+        if (item.get("name") or "").strip() == city_name:
+            return item.get("id")
+    raise ValueError(f"未找到城市 '{city_name}' (city_id)")
+
+
+def lookup_project_id(project_name, auth_token, cookies):
+    data = _gaodun_get(GAODUN_PROJECTS_ENDPOINT, {}, auth_token, cookies)
+    for item in data.get("result") or []:
+        if (item.get("name") or "").strip() == project_name:
+            return item.get("id")
+    raise ValueError(f"未找到项目 '{project_name}' (intent_project_id)")
+
+
+def lookup_channel_id(channel_name, auth_token, cookies):
+    if not channel_name:
+        return None
+    data = _gaodun_get(GAODUN_CHANNELS_ENDPOINT, {}, auth_token, cookies)
+    items = data.get("result") or []
+    candidates = [channel_name]
+    if '-' in channel_name:
+        candidates.append(channel_name.split('-', 1)[1])
+    for cand in candidates:
+        for item in items:
+            if (item.get("name") or "").strip() == cand:
+                return item.get("id")
+    raise ValueError(f"未找到校区 '{channel_name}' (market_channel_id)")
+
+
+def fetch_user_scope(intent_project_id, auth_token, cookies):
+    payload = {"intentProjectIdList": [intent_project_id], "typeIdList": [12308]}
+    return _gaodun_post(GAODUN_SCOPE_ENDPOINT, payload, auth_token, cookies)
+
+
+def _find_scope_value(scope_data, result_index, target_name):
+    results = scope_data.get("result") or []
+    if result_index >= len(results):
+        return None
+    bucket = results[result_index] or {}
+    for item in bucket.get("obTagsValueOutPutList") or []:
+        if (item.get("tagsValueName") or "").strip() == target_name:
+            return item
+    return None
+
+
+def build_tags_infos(project, project_tag, short_name, scope_data):
+    rule = PROJECT_TAG_RULES.get(project)
+    if rule is None:
+        return None
+    if rule.get("kind") == "hardcoded":
+        return rule["tags_infos"]
+
+    target_name = short_name if rule["match_by"] == "short_name" else project_tag
+    found = _find_scope_value(scope_data, rule["result_index"], target_name)
+    if found is None and rule.get("fallback_name"):
+        found = _find_scope_value(scope_data, rule["result_index"], rule["fallback_name"])
+    if found is None:
+        raise ValueError(
+            f"在 obTagsValueOutPutList 中未找到 tagsValueName='{target_name}'"
+            f"{'（含 fallback 未知）' if rule.get('fallback_name') else ''}"
+        )
+
+    checked_item = {
+        "id": found.get("id"),
+        "objectId": found.get("objectId"),
+        "tagsValueCode": found.get("tagsValueCode"),
+        "tagsValueName": found.get("tagsValueName"),
+        "checkStatus": True,
+    }
+    if found.get("tagsId") is not None:
+        checked_item["tagsId"] = found.get("tagsId")
+
+    tag = dict(rule["tag_template"])
+    tag["obTagsValueCheckedList"] = [checked_item]
+    return [tag]
+
+
+def build_gaodun_payload(state, state_id, city, city_id, project, project_tag,
+                         intent_project_id, market_channel_id, behavior_id,
+                         mobile, follow_records, tags_infos):
+    return {
+        "beginTime": None,
+        "behaviorId": behavior_id,
+        "city": city,
+        "cityId": city_id,
+        "contactType": None,
+        "countryId": 18784,
+        "endTime": None,
+        "followRecords": follow_records,
+        "gender": 115003,
+        "intentProjectId": intent_project_id,
+        "lineTelPhone": "",
+        "marketChannelId": market_channel_id,
+        "mobile": mobile,
+        "overSeaAreaCode": "",
+        "professionId": 117004,
+        "ruleType": "100521538",
+        "specifiedDate": None,
+        "state": state,
+        "stateId": state_id,
+        "tagsInfos": tags_infos or [],
+        "trueName": "未留名",
+    }
+
+
+def submit_gaodun(row_data, config):
+    auth_token = (config.get("auth_token") or "").strip()
+    cookie_text = (config.get("cookie") or "").strip()
+    if not auth_token:
+        raise ValueError("请先在右上角「配置」中填写高顿 auth_token")
+
+    cookies = parse_cookie_string(cookie_text)
+    source = (row_data.get("来源") or "").strip()
+    project = (row_data.get("项目") or "").strip()
+    project_tag = (row_data.get("项目标签") or "").strip()
+    mobile = (row_data.get("电话") or "").strip()
+    state = (row_data.get("省") or "").strip()
+    city = (row_data.get("城市") or "").strip()
+    campus = (row_data.get("校区") or "").strip()
+    remark = (row_data.get("备注") or "").strip()
+
+    state_id, short_name = lookup_state(state, auth_token, cookies)
+    city_id = lookup_city(city, state_id, auth_token, cookies)
+    intent_project_id = lookup_project_id(project, auth_token, cookies)
+    market_channel_id = lookup_channel_id(campus, auth_token, cookies) if campus else None
+    if market_channel_id is None and source == "400":
+        market_channel_id = DEFAULT_400_MARKET_CHANNEL_ID
+    behavior_id = 246 if source == "400" else 247
+    follow_records = f"{project};{campus};{remark}"
+
+    tags_infos = None
+    if project in PROJECT_TAG_RULES:
+        rule = PROJECT_TAG_RULES[project]
+        scope_data = {}
+        if rule.get("kind") == "scope_lookup":
+            scope_data = fetch_user_scope(intent_project_id, auth_token, cookies)
+        tags_infos = build_tags_infos(project, project_tag, short_name, scope_data)
+
+    payload = build_gaodun_payload(
+        state=state,
+        state_id=state_id,
+        city=city,
+        city_id=city_id,
+        project=project,
+        project_tag=project_tag,
+        intent_project_id=intent_project_id,
+        market_channel_id=market_channel_id,
+        behavior_id=behavior_id,
+        mobile=mobile,
+        follow_records=follow_records,
+        tags_infos=tags_infos,
+    )
+    print("高顿提交 payload:", json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+    response = _gaodun_post(GAODUN_SUBMIT_ENDPOINT, payload, auth_token, cookies)
+    print("高顿提交 response:", json.dumps(response, ensure_ascii=False, indent=2), flush=True)
+    status = response.get("status")
+    code = response.get("code")
+    if not (status == 0 or code == 0):
+        raise ValueError(f"高顿接口返回失败：{json.dumps(response, ensure_ascii=False)}")
+    return {"payload": payload, "response": response}
 
 
 HTML = r"""<!DOCTYPE html>
@@ -560,7 +970,8 @@ HTML = r"""<!DOCTYPE html>
 
   .form-group { margin-bottom: 16px; }
   .form-group label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
-  .form-group input { width: 100%; }
+  .form-group input, .form-group textarea { width: 100%; }
+  .form-group textarea { min-height: 86px; max-height: 140px; resize: vertical; }
 
   .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
 
@@ -629,15 +1040,22 @@ HTML = r"""<!DOCTYPE html>
 <!-- Config Modal -->
 <div class="modal-overlay" id="config-modal">
   <div class="modal">
-    <h2>⚙ 影刀触发配置</h2>
-    <p>填写影刀机器人的 HTTP 触发地址。如不确定，请先在影刀中开启 HTTP 触发器。</p>
+    <h2>⚙ 提交配置</h2>
+    <p>填写高顿接口需要的 auth_token 和 cookie。影刀触发地址保留备用。</p>
+    <div class="form-group">
+      <label>高顿 auth_token</label>
+      <input type="text" id="cfg-auth-token" placeholder="Basic eyJ...">
+    </div>
+    <div class="form-group">
+      <label>高顿 cookie</label>
+      <textarea id="cfg-cookie" placeholder="acw_tc=...; JSESSIONID=..."></textarea>
+    </div>
     <div class="form-group">
       <label>影刀触发 URL</label>
       <input type="text" id="cfg-url" placeholder="http://127.0.0.1:9333/api/v1/robots/YOUR_ID/run">
     </div>
     <p style="margin-top:-8px; font-size:13px;">
-      如何获取：影刀 → 打开机器人 → 触发器 → HTTP触发 → 复制地址<br>
-      数据将以 JSON 格式传入，可在影刀中用 <code>{{params.项目}}</code> 等变量接收
+      auth_token 对应抓包请求头里的 <code>Authentication</code>；cookie 可以整段粘贴浏览器请求头里的 Cookie。
     </p>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeConfig()">取消</button>
@@ -659,7 +1077,7 @@ let SOURCE_OPTIONS = [];
 let PROJECT_TAG_MAP = {};
 let PROVINCE_CITY_MAP = {};
 let rowCount = 0;
-let config = { yingdao_url: '' };
+let config = { yingdao_url: '', auth_token: '', cookie: '' };
 
 // ── Init ────────────────────────────────────────────────
 function buildDatalists() {
@@ -806,11 +1224,15 @@ function loadConfig() {
     .then(d => {
       config = d;
       document.getElementById('cfg-url').value = d.yingdao_url || '';
+      document.getElementById('cfg-auth-token').value = d.auth_token || '';
+      document.getElementById('cfg-cookie').value = d.cookie || '';
     });
 }
 
 function openConfig() {
   document.getElementById('cfg-url').value = config.yingdao_url || '';
+  document.getElementById('cfg-auth-token').value = config.auth_token || '';
+  document.getElementById('cfg-cookie').value = config.cookie || '';
   document.getElementById('config-modal').classList.add('show');
 }
 
@@ -820,11 +1242,15 @@ function closeConfig() {
 
 function saveConfig() {
   const url = document.getElementById('cfg-url').value.trim();
+  const authToken = document.getElementById('cfg-auth-token').value.trim();
+  const cookie = document.getElementById('cfg-cookie').value.trim();
   config.yingdao_url = url;
+  config.auth_token = authToken;
+  config.cookie = cookie;
   fetch('/save_config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ yingdao_url: url })
+    body: JSON.stringify({ yingdao_url: url, auth_token: authToken, cookie: cookie })
   }).then(() => {
     closeConfig();
     toast('配置已保存', 'success');
@@ -1456,7 +1882,7 @@ function triggerRow(id) {
       btn.classList.remove('loading');
       btn.classList.add('done');
       btn.textContent = '✓ 已完成';
-      toast(`第${getRowNum(id)}行 - 已保存到 Excel`, 'success');
+      toast(`第${getRowNum(id)}行 - 已保存到 Excel，并已提交表单`, 'success');
       saveRowsToStorage();
       startPolling(id);
     } else {
@@ -1529,7 +1955,8 @@ def get_options():
 
 @app.route('/save_config', methods=['POST'])
 def save_config():
-    data = request.json
+    data = load_config()
+    data.update(request.json or {})
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return jsonify({"success": True})
@@ -1572,7 +1999,8 @@ def save_excel():
     row_data = request.json
     try:
         save_to_excel(row_data)
-        return jsonify({"success": True})
+        submit_result = submit_gaodun(row_data, load_config())
+        return jsonify({"success": True, "submit": submit_result["response"]})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
