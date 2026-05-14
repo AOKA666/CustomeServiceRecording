@@ -398,20 +398,8 @@ def _gaodun_post(path, payload, auth_token, cookies):
     return resp.json()
 
 
-def load_search_auth_token(config=None):
-    cookie_file = os.path.join(BASE_DIR, "Cookie.txt")
-    if os.path.exists(cookie_file):
-        with open(cookie_file, "r", encoding="utf-8") as f:
-            token = f.read().strip()
-            if token:
-                return token
-    if config:
-        return (config.get("auth_token") or "").strip()
-    return ""
-
-
 def lookup_teacher_name(mobile, project, config=None):
-    auth_token = load_search_auth_token(config)
+    auth_token = (config.get("auth_token") or "").strip() if config else ""
     if not auth_token:
         return "查不到"
 
