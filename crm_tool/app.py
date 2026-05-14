@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import os
-import time
 from openpyxl import load_workbook, Workbook
 
 app = Flask(__name__)
@@ -11,9 +10,6 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 EXCEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'info.xlsx')
 
 EXCEL_HEADERS = ['来源', '项目', '电话', '微信', '省', '城市', '备注', '项目标签', '校区', '行为', 'row_id']
-
-# 内存存储影刀回传结果 {row_id: {"result": str, "code": int, "data": list, "timestamp": int}}
-results_store = {}
 
 def save_to_excel(row_data):
     if os.path.exists(EXCEL_FILE):
@@ -178,7 +174,9 @@ GAODUN_REGIONS_ENDPOINT = "/prm/api/v1/regions/sub/get"
 GAODUN_PROJECTS_ENDPOINT = "/solon/api/v1/authority/projects/without-conflict-projects"
 GAODUN_CHANNELS_ENDPOINT = "/solon/api/v1/channel/online/get-channels"
 GAODUN_SCOPE_ENDPOINT = "/solon/api/v1/online-consultation/get-online-user-scope"
+GAODUN_QUICK_SEARCH_ENDPOINT = "/solon/api/v1/clues/global-quick-search"
 DEFAULT_400_MARKET_CHANNEL_ID = 4583
+DEFAULT_400_CAMPUS = "高顿网校 SEO"
 
 PROJECT_TAG_RULES = {
     "公务员": {
@@ -400,6 +398,61 @@ def _gaodun_post(path, payload, auth_token, cookies):
     return resp.json()
 
 
+def load_search_auth_token(config=None):
+    cookie_file = os.path.join(BASE_DIR, "Cookie.txt")
+    if os.path.exists(cookie_file):
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+            if token:
+                return token
+    if config:
+        return (config.get("auth_token") or "").strip()
+    return ""
+
+
+def lookup_teacher_name(mobile, project, config=None):
+    auth_token = load_search_auth_token(config)
+    if not auth_token:
+        return "查不到"
+
+    payload = {
+        "pageNum": 1,
+        "pageSize": 10,
+        "clueNo": "",
+        "customerName": "",
+        "customerNo": "",
+        "mobile": mobile,
+        "otherContact": "",
+        "overseaMobile": "",
+        "searchColumn": "mobile",
+    }
+    try:
+        data = _gaodun_post(GAODUN_QUICK_SEARCH_ENDPOINT, payload, auth_token, {})
+    except Exception as e:
+        print(f"查询老师失败: {e}", flush=True)
+        return "查不到"
+    result_list = ((data.get("result") or {}).get("list") or [])
+    matched = None
+    if len(result_list) > 1:
+        for item in result_list:
+            if (item.get("intentProjectName") or "").strip() == project:
+                matched = item
+                break
+    elif result_list:
+        matched = result_list[0]
+
+    if matched is None:
+        return "查不到"
+
+    owner_name = matched.get("ownerName") or ""
+    real_name = owner_name.split("-")[-1].strip()
+    intent_project = (matched.get("intentProjectName") or project).strip()
+
+    if not real_name or real_name == "新海":
+        real_name = load_emergency_contacts().get(intent_project, "查不到")
+    return real_name or "查不到"
+
+
 def lookup_state(state_name, auth_token, cookies):
     data = _gaodun_get(GAODUN_REGIONS_ENDPOINT,
                        {"parentId": 18784, "level": 1}, auth_token, cookies)
@@ -517,6 +570,39 @@ def build_gaodun_payload(state, state_id, city, city_id, project, project_tag,
     }
 
 
+def normalize_row_data(row_data):
+    normalized = dict(row_data or {})
+    source = (normalized.get("来源") or "").strip()
+    campus = (normalized.get("校区") or "").strip()
+    if source == "400" and not campus:
+        normalized["校区"] = DEFAULT_400_CAMPUS
+    return normalized
+
+
+def build_submit_display_text(row_data, follow_records, config=None):
+    source = (row_data.get("来源") or "").strip()
+    mobile = (row_data.get("电话") or "").strip()
+    project = (row_data.get("项目") or "").strip()
+    remark = (row_data.get("备注") or "").strip()
+    if source != "400":
+        return f"{mobile}, {follow_records}"
+
+    real_name = lookup_teacher_name(mobile, project, config)
+    mobile2 = mobile[-4:] if len(mobile) >= 4 else mobile
+    first_line = f"{real_name}, 老师这个学生咨询{project}，辛苦联系一下，电话：{mobile}，{remark}。"
+    second_line = "\t".join([
+        "接通",
+        "呼入",
+        mobile2,
+        project,
+        remark,
+        "是",
+        "闫伟杰",
+        real_name,
+    ])
+    return first_line + "\n" + second_line
+
+
 def submit_gaodun(row_data, config):
     auth_token = (config.get("auth_token") or "").strip()
     cookie_text = (config.get("cookie") or "").strip()
@@ -536,8 +622,12 @@ def submit_gaodun(row_data, config):
     state_id, short_name = lookup_state(state, auth_token, cookies)
     city_id = lookup_city(city, state_id, auth_token, cookies)
     intent_project_id = lookup_project_id(project, auth_token, cookies)
-    market_channel_id = lookup_channel_id(campus, auth_token, cookies) if campus else None
+    if source == "400" and campus == DEFAULT_400_CAMPUS:
+        market_channel_id = DEFAULT_400_MARKET_CHANNEL_ID
+    else:
+        market_channel_id = lookup_channel_id(campus, auth_token, cookies) if campus else None
     if market_channel_id is None and source == "400":
+        campus = DEFAULT_400_CAMPUS
         market_channel_id = DEFAULT_400_MARKET_CHANNEL_ID
     behavior_id = 246 if source == "400" else 247
     follow_records = f"{project};{campus};{remark}"
@@ -571,7 +661,11 @@ def submit_gaodun(row_data, config):
     code = response.get("code")
     if not (status == 0 or code == 0):
         raise ValueError(f"高顿接口返回失败：{json.dumps(response, ensure_ascii=False)}")
-    return {"payload": payload, "response": response}
+    return {
+        "payload": payload,
+        "response": response,
+        "display_text": build_submit_display_text(row_data, follow_records, config),
+    }
 
 
 HTML = r"""<!DOCTYPE html>
@@ -793,6 +887,8 @@ HTML = r"""<!DOCTYPE html>
 
   tbody tr:last-child { border-bottom: none; }
   tbody tr:hover { background: var(--accent-glow); }
+  tbody tr.completed-row { background: #dbeafe; }
+  tbody tr.completed-row:hover { background: #c7dffb; }
 
   td {
     padding: 6px 5px;
@@ -923,6 +1019,9 @@ HTML = r"""<!DOCTYPE html>
     background: var(--surface2);
     border-bottom: 1px solid var(--border);
   }
+  .completed-row + .result-row {
+    background: #d7e7fb;
+  }
   .result-row td {
     padding: 6px 12px;
   }
@@ -1041,7 +1140,7 @@ HTML = r"""<!DOCTYPE html>
 <div class="modal-overlay" id="config-modal">
   <div class="modal">
     <h2>⚙ 提交配置</h2>
-    <p>填写高顿接口需要的 auth_token 和 cookie。影刀触发地址保留备用。</p>
+    <p>填写高顿接口需要的 auth_token 和 cookie。</p>
     <div class="form-group">
       <label>高顿 auth_token</label>
       <input type="text" id="cfg-auth-token" placeholder="Basic eyJ...">
@@ -1049,10 +1148,6 @@ HTML = r"""<!DOCTYPE html>
     <div class="form-group">
       <label>高顿 cookie</label>
       <textarea id="cfg-cookie" placeholder="acw_tc=...; JSESSIONID=..."></textarea>
-    </div>
-    <div class="form-group">
-      <label>影刀触发 URL</label>
-      <input type="text" id="cfg-url" placeholder="http://127.0.0.1:9333/api/v1/robots/YOUR_ID/run">
     </div>
     <p style="margin-top:-8px; font-size:13px;">
       auth_token 对应抓包请求头里的 <code>Authentication</code>；cookie 可以整段粘贴浏览器请求头里的 Cookie。
@@ -1077,7 +1172,8 @@ let SOURCE_OPTIONS = [];
 let PROJECT_TAG_MAP = {};
 let PROVINCE_CITY_MAP = {};
 let rowCount = 0;
-let config = { yingdao_url: '', auth_token: '', cookie: '' };
+let config = { auth_token: '', cookie: '' };
+const DEFAULT_400_CAMPUS = '高顿网校 SEO';
 
 // ── Init ────────────────────────────────────────────────
 function buildDatalists() {
@@ -1223,14 +1319,12 @@ function loadConfig() {
     .then(r => r.json())
     .then(d => {
       config = d;
-      document.getElementById('cfg-url').value = d.yingdao_url || '';
       document.getElementById('cfg-auth-token').value = d.auth_token || '';
       document.getElementById('cfg-cookie').value = d.cookie || '';
     });
 }
 
 function openConfig() {
-  document.getElementById('cfg-url').value = config.yingdao_url || '';
   document.getElementById('cfg-auth-token').value = config.auth_token || '';
   document.getElementById('cfg-cookie').value = config.cookie || '';
   document.getElementById('config-modal').classList.add('show');
@@ -1241,16 +1335,14 @@ function closeConfig() {
 }
 
 function saveConfig() {
-  const url = document.getElementById('cfg-url').value.trim();
   const authToken = document.getElementById('cfg-auth-token').value.trim();
   const cookie = document.getElementById('cfg-cookie').value.trim();
-  config.yingdao_url = url;
   config.auth_token = authToken;
   config.cookie = cookie;
   fetch('/save_config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ yingdao_url: url, auth_token: authToken, cookie: cookie })
+    body: JSON.stringify({ auth_token: authToken, cookie: cookie })
   }).then(() => {
     closeConfig();
     toast('配置已保存', 'success');
@@ -1576,8 +1668,8 @@ function addRow() {
   resultTr.dataset.resultFor = id;
   resultTr.innerHTML = `
     <td colspan="13">
-      <div class="result-label">影刀回传结果</div>
-      <textarea id="result-text-${id}" readonly placeholder="等待影刀回传数据..."></textarea>
+      <div class="result-label">提交结果</div>
+      <textarea id="result-text-${id}" readonly placeholder="提交完成后自动填写 mobile, follow_records"></textarea>
     </td>
   `;
   tbody.appendChild(resultTr);
@@ -1606,7 +1698,6 @@ function deleteRow(id) {
     setTimeout(() => {
       tr.remove();
       if (resultTr) resultTr.remove();
-      stopPolling(id);
       updateCounter();
       if (document.getElementById('table-body').children.length === 0) {
         document.getElementById('empty-state').style.display = '';
@@ -1723,8 +1814,8 @@ function restoreRow(data) {
   resultTr.dataset.resultFor = id;
   resultTr.innerHTML = `
     <td colspan="13">
-      <div class="result-label">影刀回传结果</div>
-      <textarea id="result-text-${id}" readonly placeholder="等待影刀回传数据..."></textarea>
+      <div class="result-label">提交结果</div>
+      <textarea id="result-text-${id}" readonly placeholder="提交完成后自动填写 mobile, follow_records"></textarea>
     </td>
   `;
   tbody.appendChild(resultTr);
@@ -1761,6 +1852,7 @@ function restoreRow(data) {
 
   // restore completed state
   if (data._completed) {
+    tr.classList.add('completed-row');
     const btn = tr.querySelector('.btn-trigger');
     if (btn) {
       btn.classList.remove('loading');
@@ -1798,51 +1890,6 @@ function setStatus(id, type, text) {
   el.innerHTML = `<span class="status-dot"></span>${text}`;
 }
 
-const pollTimers = {};
-
-function startPolling(id) {
-  const textarea = document.getElementById('result-text-' + id);
-  if (textarea) textarea.value = '';
-  let count = 0;
-  const maxCount = 60;
-
-  pollTimers[id] = setInterval(() => {
-    count++;
-    if (count > maxCount) {
-      stopPolling(id);
-      const ta = document.getElementById('result-text-' + id);
-      if (ta && !ta.value) ta.value = '【超时】120秒内未收到影刀回传数据';
-      return;
-    }
-    fetch('/poll_result/' + id)
-      .then(r => r.json())
-      .then(res => {
-        if (res.found) {
-          stopPolling(id);
-          const ta = document.getElementById('result-text-' + id);
-          if (ta) {
-            const d = res.data;
-            const lines = [
-              'result: ' + (d.result || ''),
-              'code: ' + (d.code || 0),
-              'data: ' + JSON.stringify(d.data || [], null, 2)
-            ];
-            ta.value = lines.join('\n');
-          }
-          saveRowsToStorage();
-        }
-      })
-      .catch(() => {});
-  }, 2000);
-}
-
-function stopPolling(id) {
-  if (pollTimers[id]) {
-    clearInterval(pollTimers[id]);
-    delete pollTimers[id];
-  }
-}
-
 function triggerRow(id) {
   const data = getRowData(id);
 
@@ -1862,10 +1909,21 @@ function triggerRow(id) {
     toast('请填写「校区」（来源非400时必填）', 'error');
     return;
   }
+  if (data['来源'] === '400' && (!data['校区'] || !data['校区'].trim())) {
+    data['校区'] = DEFAULT_400_CAMPUS;
+    const tr = document.getElementById('row-' + id);
+    const campusInput = tr ? tr.querySelector('td[data-field="校区"] input[data-field="校区"]') : null;
+    if (campusInput) {
+      campusInput.value = DEFAULT_400_CAMPUS;
+      setFieldText(campusInput, DEFAULT_400_CAMPUS);
+    }
+  }
 
   data['row_id'] = String(id);
 
   const btn = document.getElementById('trigger-btn-' + id);
+  const row = document.getElementById('row-' + id);
+  if (row) row.classList.remove('completed-row');
   btn.classList.add('loading');
   btn.textContent = '⏳ 保存中...';
   setStatus(id, 'loading', '保存中');
@@ -1882,9 +1940,11 @@ function triggerRow(id) {
       btn.classList.remove('loading');
       btn.classList.add('done');
       btn.textContent = '✓ 已完成';
+      if (row) row.classList.add('completed-row');
       toast(`第${getRowNum(id)}行 - 已保存到 Excel，并已提交表单`, 'success');
+      const resultTa = document.getElementById('result-text-' + id);
+      if (resultTa) resultTa.value = res.display_text || '';
       saveRowsToStorage();
-      startPolling(id);
     } else {
       throw new Error(res.error || '保存失败');
     }
@@ -1996,36 +2056,17 @@ def trigger():
 
 @app.route('/save_excel', methods=['POST'])
 def save_excel():
-    row_data = request.json
+    row_data = normalize_row_data(request.json)
     try:
         save_to_excel(row_data)
         submit_result = submit_gaodun(row_data, load_config())
-        return jsonify({"success": True, "submit": submit_result["response"]})
+        return jsonify({
+            "success": True,
+            "submit": submit_result["response"],
+            "display_text": submit_result["display_text"]
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route('/receive', methods=['POST'])
-def receive():
-    data = request.json or {}
-    row_id = data.get('row_id')
-    if not row_id:
-        return jsonify({"success": False, "error": "缺少 row_id"}), 400
-    results_store[row_id] = {
-        "result": data.get('result', ''),
-        "code": data.get('code', 0),
-        "data": data.get('data', []),
-        "timestamp": int(time.time())
-    }
-    return jsonify({"success": True})
-
-
-@app.route('/poll_result/<row_id>', methods=['GET'])
-def poll_result(row_id):
-    result = results_store.pop(row_id, None)
-    if result:
-        return jsonify({"found": True, "data": result})
-    return jsonify({"found": False})
 
 
 if __name__ == '__main__':
