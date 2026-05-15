@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import os
+import time
 from openpyxl import load_workbook, Workbook
 
 app = Flask(__name__)
@@ -398,7 +399,7 @@ def _gaodun_post(path, payload, auth_token, cookies):
     return resp.json()
 
 
-def lookup_teacher_name(mobile, project, config=None):
+def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=1.5):
     auth_token = (config.get("auth_token") or "").strip() if config else ""
     if not auth_token:
         return "查不到"
@@ -414,31 +415,37 @@ def lookup_teacher_name(mobile, project, config=None):
         "overseaMobile": "",
         "searchColumn": "mobile",
     }
-    try:
-        data = _gaodun_post(GAODUN_QUICK_SEARCH_ENDPOINT, payload, auth_token, {})
-    except Exception as e:
-        print(f"查询老师失败: {e}", flush=True)
-        return "查不到"
-    result_list = ((data.get("result") or {}).get("list") or [])
-    matched = None
-    if len(result_list) > 1:
-        for item in result_list:
-            if (item.get("intentProjectName") or "").strip() == project:
-                matched = item
-                break
-    elif result_list:
-        matched = result_list[0]
+    for attempt in range(1, attempts + 1):
+        try:
+            data = _gaodun_post(GAODUN_QUICK_SEARCH_ENDPOINT, payload, auth_token, {})
+        except Exception as e:
+            print(f"查询老师失败: {e}", flush=True)
+            data = {}
 
-    if matched is None:
-        return "查不到"
+        result_list = ((data.get("result") or {}).get("list") or [])
+        matched = None
+        if len(result_list) > 1:
+            for item in result_list:
+                if (item.get("intentProjectName") or "").strip() == project:
+                    matched = item
+                    break
+        elif result_list:
+            matched = result_list[0]
 
-    owner_name = matched.get("ownerName") or ""
-    real_name = owner_name.split("-")[-1].strip()
-    intent_project = (matched.get("intentProjectName") or project).strip()
+        if matched is not None:
+            owner_name = matched.get("ownerName") or ""
+            real_name = owner_name.split("-")[-1].strip()
+            intent_project = (matched.get("intentProjectName") or project).strip()
 
-    if not real_name or real_name == "新海":
-        real_name = load_emergency_contacts().get(intent_project, "查不到")
-    return real_name or "查不到"
+            if not real_name or real_name == "新海":
+                real_name = load_emergency_contacts().get(intent_project, "查不到")
+            return real_name or "查不到"
+
+        if attempt < attempts:
+            print(f"老师查询未命中，等待后重试 {attempt}/{attempts}", flush=True)
+            time.sleep(delay_seconds)
+
+    return "查不到"
 
 
 def lookup_state(state_name, auth_token, cookies):
@@ -575,6 +582,7 @@ def build_submit_display_text(row_data, follow_records, config=None):
     if source != "400":
         return f"{mobile}, {follow_records}"
 
+    print("表单提交成功，开始查询老师", flush=True)
     real_name = lookup_teacher_name(mobile, project, config)
     mobile2 = mobile[-4:] if len(mobile) >= 4 else mobile
     first_line = f"{real_name}, 老师这个学生咨询{project}，辛苦联系一下，电话：{mobile}，{remark}。"
