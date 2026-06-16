@@ -12,19 +12,29 @@ EXCEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'info.xlsx')
 
 EXCEL_HEADERS = ['来源', '项目', '电话', '微信', '省', '城市', '备注', '项目标签', '校区', '行为', 'row_id']
 
+def reset_excel_file():
+    wb = Workbook()
+    ws = wb.active
+    ws.append(EXCEL_HEADERS)
+    wb.save(EXCEL_FILE)
+
+
 def save_to_excel(row_data):
     if os.path.exists(EXCEL_FILE):
         wb = load_workbook(EXCEL_FILE)
         ws = wb.active
+        first_row = [ws.cell(row=1, column=col).value for col in range(1, len(EXCEL_HEADERS) + 1)]
+        if first_row != EXCEL_HEADERS:
+            ws.insert_rows(1)
+            for col, h in enumerate(EXCEL_HEADERS, 1):
+                ws.cell(row=1, column=col, value=h)
     else:
-        wb = Workbook()
+        reset_excel_file()
+        wb = load_workbook(EXCEL_FILE)
         ws = wb.active
-        for col, h in enumerate(EXCEL_HEADERS, 1):
-            ws.cell(row=1, column=col, value=h)
 
     row_values = [row_data.get(h, '') for h in EXCEL_HEADERS]
-    for col, value in enumerate(row_values, 1):
-        ws.cell(row=2, column=col, value=value)
+    ws.append(row_values)
     wb.save(EXCEL_FILE)
     return True
 
@@ -437,9 +447,9 @@ def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=
             real_name = owner_name.split("-")[-1].strip()
             intent_project = (matched.get("intentProjectName") or project).strip()
 
-            if not real_name or real_name == "新海":
-                real_name = load_emergency_contacts().get(intent_project, "查不到")
-            return real_name or "查不到"
+            if not real_name or real_name == "新海" or real_name == "管理员":
+                owner_name = load_emergency_contacts().get(intent_project, "查不到")
+            return owner_name or "查不到"
 
         if attempt < attempts:
             print(f"老师查询未命中，等待后重试 {attempt}/{attempts}", flush=True)
@@ -583,9 +593,11 @@ def build_submit_display_text(row_data, follow_records, config=None):
         return f"{mobile}, {follow_records}"
 
     print("表单提交成功，开始查询老师", flush=True)
-    real_name = lookup_teacher_name(mobile, project, config)
+    time.sleep(2)
+    owner_name = lookup_teacher_name(mobile, project, config)
+    real_name = owner_name.split("-")[-1].strip()
     mobile2 = mobile[-4:] if len(mobile) >= 4 else mobile
-    first_line = f"{real_name}, 老师这个学生咨询{project}，辛苦联系一下，电话：{mobile}，{remark}。"
+    first_line = f"{owner_name}：老师这个学生咨询{project}，辛苦联系一下，电话：{mobile}，{remark}。"
     second_line = "\t".join([
         "接通",
         "呼入",
@@ -924,6 +936,50 @@ HTML = r"""<!DOCTYPE html>
 
   textarea { min-height: 48px; max-height: 80px; }
 
+  td[data-field="备注"] textarea {
+    padding-right: 18px;
+  }
+
+  .cell-toggle {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    width: 7px;
+    height: 7px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: currentColor;
+    cursor: pointer;
+    z-index: 2;
+    opacity: 0.34;
+    transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s;
+  }
+
+  .cell-toggle:hover {
+    opacity: 0.78;
+    transform: scale(1.18);
+  }
+
+  .note-border-toggle {
+    color: #ef4444;
+  }
+
+  .source-corner-toggle {
+    color: #22c55e;
+  }
+
+  td.note-red-border textarea {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239,68,68,0.16);
+  }
+
+  td.note-red-border .note-border-toggle,
+  td.source-corner .source-corner-toggle {
+    opacity: 1;
+    box-shadow: 0 0 0 2px rgba(255,255,255,0.95), 0 0 7px currentColor;
+  }
+
   select option { background: var(--surface2); }
 
   /* ── Status badge ── */
@@ -997,7 +1053,7 @@ HTML = r"""<!DOCTYPE html>
 
   /* ── Column widths ── */
   .col-idx     { width: 30px; }
-  .col-source  { width: 70px; }
+  .col-source  { width: 55px; }
   .col-proj    { width: 95px; }
   .col-phone   { width: 105px; }
   .col-wx      { width: 85px; }
@@ -1235,7 +1291,9 @@ function buildDatalists() {
 function buildCityDatalist(rowId, province) {
   const oldDl = document.getElementById('city-list-' + rowId);
   if (oldDl) oldDl.remove();
-  const cities = PROVINCE_CITY_MAP[province] || [];
+  const cities = province
+    ? (PROVINCE_CITY_MAP[province] || [])
+    : Array.from(new Set(Object.values(PROVINCE_CITY_MAP).flat()));
   if (cities.length === 0) return;
   const dl = document.createElement('datalist');
   dl.id = 'city-list-' + rowId;
@@ -1245,6 +1303,45 @@ function buildCityDatalist(rowId, province) {
     dl.appendChild(option);
   });
   document.body.appendChild(dl);
+}
+
+function normalizeRegionName(value) {
+  return (value || '').trim().replace(/\s+/g, '');
+}
+
+function stripCitySuffix(value) {
+  return normalizeRegionName(value).replace(/(特别行政区|自治州|地区|盟|市|县|区)$/g, '');
+}
+
+function findProvinceByCity(cityName) {
+  const normalizedCityName = normalizeRegionName(cityName);
+  const shortCityName = stripCitySuffix(cityName);
+  if (!normalizedCityName) return '';
+
+  for (const [province, cities] of Object.entries(PROVINCE_CITY_MAP)) {
+    for (const city of cities) {
+      if (normalizeRegionName(city) === normalizedCityName || stripCitySuffix(city) === shortCityName) {
+        return province;
+      }
+    }
+  }
+  return '';
+}
+
+function syncProvinceFromCity(cityInput) {
+  const tr = cityInput.closest('tr');
+  if (!tr) return false;
+
+  const province = findProvinceByCity(cityInput.value);
+  if (!province) return false;
+
+  const provinceInput = tr.querySelector('td[data-field="省"] input[data-field="省"]');
+  if (provinceInput && provinceInput.value !== province) {
+    provinceInput.value = province;
+    setFieldText(provinceInput, province);
+  }
+  buildCityDatalist(tr.dataset.id, province);
+  return true;
 }
 
 window.onload = () => {
@@ -1274,12 +1371,17 @@ window.onload = () => {
         } else if (field === '省') {
           const tr = e.target.closest('tr');
           if (tr) buildCityDatalist(tr.dataset.id, e.target.value);
+        } else if (field === '城市') {
+          syncProvinceFromCity(e.target);
         }
         saveRowsToStorage();
       });
 
       document.getElementById('table-body').addEventListener('input', function(e) {
         if (e.target.dataset.field) {
+          if (e.target.dataset.field === '城市') {
+            syncProvinceFromCity(e.target);
+          }
           saveRowsToStorage();
         }
       });
@@ -1523,6 +1625,40 @@ function bindCellTextBridge(tr) {
   });
 }
 
+function setNoteBorder(id, enabled) {
+  const tr = document.getElementById('row-' + id);
+  const td = tr ? tr.querySelector('td[data-field="备注"]') : null;
+  if (!td) return;
+  td.classList.toggle('note-red-border', enabled);
+  const btn = td.querySelector('.note-border-toggle');
+  if (btn) btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+}
+
+function toggleNoteBorder(id) {
+  const tr = document.getElementById('row-' + id);
+  const td = tr ? tr.querySelector('td[data-field="备注"]') : null;
+  if (!td) return;
+  setNoteBorder(id, !td.classList.contains('note-red-border'));
+  saveRowsToStorage();
+}
+
+function setSourceCorner(id, enabled) {
+  const tr = document.getElementById('row-' + id);
+  const td = tr ? tr.querySelector('td[data-field="来源"]') : null;
+  if (!td) return;
+  td.classList.toggle('source-corner', enabled);
+  const btn = td.querySelector('.source-corner-toggle');
+  if (btn) btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+}
+
+function toggleSourceCorner(id) {
+  const tr = document.getElementById('row-' + id);
+  const td = tr ? tr.querySelector('td[data-field="来源"]') : null;
+  if (!td) return;
+  setSourceCorner(id, !td.classList.contains('source-corner'));
+  saveRowsToStorage();
+}
+
 function updateTagField(projectInput) {
   const tr = projectInput.closest('tr');
   if (!tr) return;
@@ -1631,13 +1767,13 @@ function addRow() {
 
   tr.innerHTML = `
     <td class="row-num">${rowCount}</td>
-    <td data-field="来源"><input type="text" list="source-list" placeholder="输入或选择来源" data-field="来源"></td>
+    <td data-field="来源"><input type="text" list="source-list" placeholder="输入或选择来源" data-field="来源"><button type="button" class="cell-toggle source-corner-toggle" title="切换来源绿色圆点" aria-label="切换来源绿色圆点" aria-pressed="false" onclick="toggleSourceCorner(${id})"></button></td>
     <td data-field="项目"><input type="text" list="project-list" placeholder="输入或选择项目" data-field="项目"></td>
     <td data-field="电话"><input type="text" placeholder="手机号" data-field="电话"></td>
     <td data-field="微信"><input type="text" placeholder="微信号" data-field="微信"></td>
     <td data-field="省"><input type="text" list="province-list" placeholder="省" data-field="省"></td>
     <td data-field="城市"><input type="text" list="city-list-${id}" placeholder="城市" data-field="城市"></td>
-    <td data-field="备注"><textarea placeholder="备注内容..." data-field="备注"></textarea></td>
+    <td data-field="备注"><textarea placeholder="备注内容..." data-field="备注"></textarea><button type="button" class="cell-toggle note-border-toggle" title="切换备注红色边框" aria-label="切换备注红色边框" aria-pressed="false" onclick="toggleNoteBorder(${id})"></button></td>
     <td data-field="项目标签"><input type="text" placeholder="标签" data-field="项目标签"></td>
     <td data-field="校区"><input type="text" list="campus-list" placeholder="输入或选择校区" data-field="校区"></td>
     <td data-field="行为"><input type="text" placeholder="行为" data-field="行为" value="网络营销/来电" readonly></td>
@@ -1671,6 +1807,7 @@ function addRow() {
   tbody.appendChild(resultTr);
 
   bindCellTextBridge(tr);
+  buildCityDatalist(id, '');
   updateCounter();
 
   // Focus first input
@@ -1735,6 +1872,10 @@ function saveRowsToStorage() {
     });
     const campusInput = tr.querySelector('[data-field="校区"]');
     if (campusInput) data._rawCampus = campusInput.dataset.rawCampus || '';
+    const noteTd = tr.querySelector('td[data-field="备注"]');
+    data._noteRedBorder = !!(noteTd && noteTd.classList.contains('note-red-border'));
+    const sourceTd = tr.querySelector('td[data-field="来源"]');
+    data._sourceCorner = !!(sourceTd && sourceTd.classList.contains('source-corner'));
     // persist completed state
     const btn = tr.querySelector('.btn-trigger');
     data._completed = btn && btn.classList.contains('done');
@@ -1777,13 +1918,13 @@ function restoreRow(data) {
 
   tr.innerHTML = `
     <td class="row-num">${rowCount}</td>
-    <td data-field="来源"><input type="text" list="source-list" placeholder="输入或选择来源" data-field="来源"></td>
+    <td data-field="来源"><input type="text" list="source-list" placeholder="输入或选择来源" data-field="来源"><button type="button" class="cell-toggle source-corner-toggle" title="切换来源绿色圆点" aria-label="切换来源绿色圆点" aria-pressed="false" onclick="toggleSourceCorner(${id})"></button></td>
     <td data-field="项目"><input type="text" list="project-list" placeholder="输入或选择项目" data-field="项目"></td>
     <td data-field="电话"><input type="text" placeholder="手机号" data-field="电话"></td>
     <td data-field="微信"><input type="text" placeholder="微信号" data-field="微信"></td>
     <td data-field="省"><input type="text" list="province-list" placeholder="省" data-field="省"></td>
     <td data-field="城市"><input type="text" list="city-list-${id}" placeholder="城市" data-field="城市"></td>
-    <td data-field="备注"><textarea placeholder="备注内容..." data-field="备注"></textarea></td>
+    <td data-field="备注"><textarea placeholder="备注内容..." data-field="备注"></textarea><button type="button" class="cell-toggle note-border-toggle" title="切换备注红色边框" aria-label="切换备注红色边框" aria-pressed="false" onclick="toggleNoteBorder(${id})"></button></td>
     <td data-field="项目标签"><input type="text" placeholder="标签" data-field="项目标签"></td>
     <td data-field="校区"><input type="text" list="campus-list" placeholder="输入或选择校区" data-field="校区"></td>
     <td data-field="行为"><input type="text" placeholder="行为" data-field="行为" value="网络营销/来电" readonly></td>
@@ -1842,9 +1983,11 @@ function restoreRow(data) {
   const projectInput = projectTd ? projectTd.querySelector('input[data-field="项目"]') : null;
   if (sourceInput) updateCampusFromSource(sourceInput);
   if (projectInput) updateTagField(projectInput);
+  setNoteBorder(id, !!data._noteRedBorder);
+  setSourceCorner(id, !!data._sourceCorner);
 
   // restore city datalist for this row
-  if (data['省']) buildCityDatalist(id, data['省']);
+  buildCityDatalist(id, data['省'] || '');
 
   // restore completed state
   if (data._completed) {
@@ -2066,6 +2209,7 @@ def save_excel():
 
 
 if __name__ == '__main__':
+    reset_excel_file()
     print("=" * 50)
     print("  客服记录台 已启动")
     print("  请在浏览器打开: http://127.0.0.1:5000")

@@ -1,0 +1,11 @@
+info.xlsx
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local secrets/config
+crm_tool/config.json
+
+# Local data files
+紧急联系人.xlsx
