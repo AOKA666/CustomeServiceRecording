@@ -82,18 +82,6 @@ http://192.168.1.23:5000
 - 电脑休眠、关机或断网后，同事无法继续使用。
 - Windows 防火墙阻止 5000 端口后，同事无法访问。
 
-## 访问密码
-
-如果要限制同事访问，在项目根目录创建 `.env`：
-
-```text
-APP_PASSWORD=你的密码
-```
-
-设置后，浏览器打开页面时会弹出账号密码框。用户名可以随便填，密码填 `APP_PASSWORD` 的值。
-
-如果不设置 `APP_PASSWORD`，则局域网内知道地址的人都可以访问。
-
 ## 依赖
 
 需要 Python 3.8+。
@@ -157,10 +145,4 @@ crm_tool/config.json
 
 ```text
 GAODUN_AUTH_TOKEN=Basic xxx
-```
-
-可选访问密码也写在 `.env`：
-
-```text
-APP_PASSWORD=change-me
 ```

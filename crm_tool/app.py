@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 import requests
 import json
 import os
@@ -17,25 +17,6 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 EXCEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'info.xlsx')
 
 EXCEL_HEADERS = ['来源', '项目', '电话', '微信', '省', '城市', '备注', '项目标签', '校区', '行为', 'row_id']
-
-
-def check_auth():
-    password = (os.environ.get("APP_PASSWORD") or "").strip()
-    if not password:
-        return True
-    auth = request.authorization
-    return bool(auth and auth.password == password)
-
-
-@app.before_request
-def require_auth():
-    if check_auth():
-        return None
-    return Response(
-        "需要访问密码",
-        401,
-        {"WWW-Authenticate": 'Basic realm="Customer Service Recorder"'}
-    )
 
 def reset_excel_file():
     wb = Workbook()
@@ -2228,6 +2209,5 @@ if __name__ == '__main__':
     print("  客服记录台 已启动")
     print("  本机访问: http://127.0.0.1:5000")
     print("  同事访问: http://你的电脑局域网IP:5000")
-    print("  如需密码，请在 .env 中设置 APP_PASSWORD")
     print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=False)
