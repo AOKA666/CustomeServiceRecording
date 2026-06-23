@@ -67,7 +67,6 @@ def save_to_excel(row_data):
 def load_config():
     defaults = {
         "yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run",
-        "auth_token": "",
         "cookie": ""
     }
     if os.path.exists(CONFIG_FILE):
@@ -432,7 +431,9 @@ def _gaodun_post(path, payload, auth_token, cookies):
 
 
 def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=1.5):
-    auth_token = (config.get("auth_token") or "").strip() if config else ""
+    auth_token = (os.environ.get("GAODUN_AUTH_TOKEN") or "").strip()
+    if not auth_token and config:
+        auth_token = (config.get("auth_token") or "").strip()
     if not auth_token:
         return "查不到"
 
@@ -618,6 +619,7 @@ def build_submit_display_text(row_data, follow_records, config=None):
     time.sleep(2)
     owner_name = lookup_teacher_name(mobile, project, config)
     real_name = owner_name.split("-")[-1].strip()
+    user_name = ((config or {}).get("name") or "闫伟杰").strip()
     mobile2 = mobile[-4:] if len(mobile) >= 4 else mobile
     first_line = f"{owner_name}：老师这个学生咨询{project}，辛苦联系一下，电话：{mobile}，{remark}。"
     second_line = "\t".join([
@@ -627,17 +629,19 @@ def build_submit_display_text(row_data, follow_records, config=None):
         project,
         remark,
         "是",
-        "闫伟杰",
+        user_name,
         real_name,
     ])
     return first_line + "\n" + second_line
 
 
 def submit_gaodun(row_data, config):
-    auth_token = (config.get("auth_token") or "").strip()
+    auth_token = (os.environ.get("GAODUN_AUTH_TOKEN") or "").strip()
+    if not auth_token:
+        auth_token = (config.get("auth_token") or "").strip()
     cookie_text = (config.get("cookie") or "").strip()
     if not auth_token:
-        raise ValueError("请先在右上角「配置」中填写高顿 auth_token")
+        raise ValueError("请先在 .env 中配置 GAODUN_AUTH_TOKEN")
 
     cookies = parse_cookie_string(cookie_text)
     source = (row_data.get("来源") or "").strip()
@@ -1214,18 +1218,11 @@ HTML = r"""<!DOCTYPE html>
 <div class="modal-overlay" id="config-modal">
   <div class="modal">
     <h2>⚙ 提交配置</h2>
-    <p>填写高顿接口需要的 auth_token 和 cookie。</p>
+    <p>填写提交文案中使用的姓名。</p>
     <div class="form-group">
-      <label>高顿 auth_token</label>
-      <input type="text" id="cfg-auth-token" placeholder="Basic eyJ...">
+      <label>姓名</label>
+      <input type="text" id="cfg-name" placeholder="闫伟杰">
     </div>
-    <div class="form-group">
-      <label>高顿 cookie</label>
-      <textarea id="cfg-cookie" placeholder="acw_tc=...; JSESSIONID=..."></textarea>
-    </div>
-    <p style="margin-top:-8px; font-size:13px;">
-      auth_token 对应抓包请求头里的 <code>Authentication</code>；cookie 可以整段粘贴浏览器请求头里的 Cookie。
-    </p>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeConfig()">取消</button>
       <button class="btn btn-primary" onclick="saveConfig()">保存</button>
@@ -1246,7 +1243,7 @@ let SOURCE_OPTIONS = [];
 let PROJECT_TAG_MAP = {};
 let PROVINCE_CITY_MAP = {};
 let rowCount = 0;
-let config = { auth_token: '', cookie: '' };
+let config = { name: '' };
 const DEFAULT_400_CAMPUS = '高顿网校 SEO';
 
 // ── Init ────────────────────────────────────────────────
@@ -1439,14 +1436,13 @@ function loadConfig() {
     .then(r => r.json())
     .then(d => {
       config = d;
-      document.getElementById('cfg-auth-token').value = d.auth_token || '';
-      document.getElementById('cfg-cookie').value = d.cookie || '';
+      config.name = localStorage.getItem('crm_config_name') || d.name || '';
+      document.getElementById('cfg-name').value = config.name || '';
     });
 }
 
 function openConfig() {
-  document.getElementById('cfg-auth-token').value = config.auth_token || '';
-  document.getElementById('cfg-cookie').value = config.cookie || '';
+  document.getElementById('cfg-name').value = config.name || '';
   document.getElementById('config-modal').classList.add('show');
 }
 
@@ -1455,18 +1451,11 @@ function closeConfig() {
 }
 
 function saveConfig() {
-  const authToken = document.getElementById('cfg-auth-token').value.trim();
-  const cookie = document.getElementById('cfg-cookie').value.trim();
-  config.auth_token = authToken;
-  config.cookie = cookie;
-  fetch('/save_config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ auth_token: authToken, cookie: cookie })
-  }).then(() => {
-    closeConfig();
-    toast('配置已保存', 'success');
-  });
+  const name = document.getElementById('cfg-name').value.trim();
+  config.name = name;
+  localStorage.setItem('crm_config_name', name);
+  closeConfig();
+  toast('配置已保存', 'success');
 }
 
 function createFieldElement(fieldName) {
@@ -2081,6 +2070,7 @@ function triggerRow(id) {
   }
 
   data['row_id'] = String(id);
+  data['_config_name'] = config.name || '';
 
   const btn = document.getElementById('trigger-btn-' + id);
   const row = document.getElementById('row-' + id);
@@ -2218,9 +2208,11 @@ def trigger():
 @app.route('/save_excel', methods=['POST'])
 def save_excel():
     row_data = normalize_row_data(request.json)
+    config = load_config()
+    config["name"] = (row_data.get("_config_name") or config.get("name") or "闫伟杰").strip()
     try:
         save_to_excel(row_data)
-        submit_result = submit_gaodun(row_data, load_config())
+        submit_result = submit_gaodun(row_data, config)
         return jsonify({
             "success": True,
             "submit": submit_result["response"],

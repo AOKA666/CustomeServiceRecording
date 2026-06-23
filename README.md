@@ -148,3 +148,19 @@ crm_tool/config.json
 - `info.xlsx` 是运行时临时结果；重启程序会清空旧数据。
 - 如果修改了 `app.py`，需要重启 `start.bat` 才能加载新代码。
 - 不要把 `auth_token`、`cookie` 或联系人数据提交到公开仓库。
+
+## 当前配置方式
+
+右上角“配置”现在只填写“姓名”。姓名保存在每个同事自己的浏览器里，用于替换提交文案中的固定姓名。
+
+高顿 token 不再通过页面填写，统一写在项目根目录 `.env`：
+
+```text
+GAODUN_AUTH_TOKEN=Basic xxx
+```
+
+可选访问密码也写在 `.env`：
+
+```text
+APP_PASSWORD=change-me
+```
