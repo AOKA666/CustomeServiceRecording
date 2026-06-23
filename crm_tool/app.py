@@ -1,16 +1,41 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import requests
 import json
 import os
 import time
+import threading
+from dotenv import load_dotenv
 from openpyxl import load_workbook, Workbook
 
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+load_dotenv(os.path.join(BASE_DIR, '.env'))
+
 app = Flask(__name__)
+EXCEL_LOCK = threading.Lock()
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 EXCEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'info.xlsx')
 
 EXCEL_HEADERS = ['来源', '项目', '电话', '微信', '省', '城市', '备注', '项目标签', '校区', '行为', 'row_id']
+
+
+def check_auth():
+    password = (os.environ.get("APP_PASSWORD") or "").strip()
+    if not password:
+        return True
+    auth = request.authorization
+    return bool(auth and auth.password == password)
+
+
+@app.before_request
+def require_auth():
+    if check_auth():
+        return None
+    return Response(
+        "需要访问密码",
+        401,
+        {"WWW-Authenticate": 'Basic realm="客服记录台"'}
+    )
 
 def reset_excel_file():
     wb = Workbook()
@@ -20,22 +45,23 @@ def reset_excel_file():
 
 
 def save_to_excel(row_data):
-    if os.path.exists(EXCEL_FILE):
-        wb = load_workbook(EXCEL_FILE)
-        ws = wb.active
-        first_row = [ws.cell(row=1, column=col).value for col in range(1, len(EXCEL_HEADERS) + 1)]
-        if first_row != EXCEL_HEADERS:
-            ws.insert_rows(1)
-            for col, h in enumerate(EXCEL_HEADERS, 1):
-                ws.cell(row=1, column=col, value=h)
-    else:
-        reset_excel_file()
-        wb = load_workbook(EXCEL_FILE)
-        ws = wb.active
+    with EXCEL_LOCK:
+        if os.path.exists(EXCEL_FILE):
+            wb = load_workbook(EXCEL_FILE)
+            ws = wb.active
+            first_row = [ws.cell(row=1, column=col).value for col in range(1, len(EXCEL_HEADERS) + 1)]
+            if first_row != EXCEL_HEADERS:
+                ws.insert_rows(1)
+                for col, h in enumerate(EXCEL_HEADERS, 1):
+                    ws.cell(row=1, column=col, value=h)
+        else:
+            reset_excel_file()
+            wb = load_workbook(EXCEL_FILE)
+            ws = wb.active
 
-    row_values = [row_data.get(h, '') for h in EXCEL_HEADERS]
-    ws.append(row_values)
-    wb.save(EXCEL_FILE)
+        row_values = [row_data.get(h, '') for h in EXCEL_HEADERS]
+        ws.append(row_values)
+        wb.save(EXCEL_FILE)
     return True
 
 def load_config():
@@ -51,10 +77,6 @@ def load_config():
             data.setdefault(k, v)
         return data
     return defaults
-
-
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-
 
 def load_project_options():
     path = os.path.join(BASE_DIR, '项目分类.txt')
@@ -2212,6 +2234,8 @@ if __name__ == '__main__':
     reset_excel_file()
     print("=" * 50)
     print("  客服记录台 已启动")
-    print("  请在浏览器打开: http://127.0.0.1:5000")
+    print("  本机访问: http://127.0.0.1:5000")
+    print("  同事访问: http://你的电脑局域网IP:5000")
+    print("  如需密码，请在 .env 中设置 APP_PASSWORD")
     print("=" * 50)
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)

@@ -1,22 +1,24 @@
 @echo off
 chcp 65001 >nul
-title 客服记录台
+title Customer Service Recorder
 
-echo 正在检查 Python...
+echo Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [错误] 未找到 Python，请先安装 Python 3.8+
+    echo [ERROR] Python not found. Please install Python 3.8+ first.
     pause
     exit /b
 )
 
-echo 正在安装依赖...
-pip install flask requests -q
+echo Installing dependencies...
+pip install flask requests openpyxl python-dotenv -q
 
 echo.
 echo ============================================
-echo   客服记录台 启动中...
-echo   请在浏览器访问: http://127.0.0.1:5000
+echo   Customer service recorder starting...
+echo   Local: http://127.0.0.1:5000
+echo   LAN:   http://YOUR-LAN-IP:5000
+echo   Run ipconfig to find your LAN IPv4 address.
 echo ============================================
 echo.
 
