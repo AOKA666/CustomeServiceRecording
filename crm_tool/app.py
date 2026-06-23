@@ -2,48 +2,22 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import os
+import re
 import time
-import threading
 from dotenv import load_dotenv
-from openpyxl import load_workbook, Workbook
+from openpyxl import load_workbook
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
-EXCEL_LOCK = threading.Lock()
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
-EXCEL_FILE = os.path.join(os.path.dirname(__file__), '..', 'info.xlsx')
-
-EXCEL_HEADERS = ['来源', '项目', '电话', '微信', '省', '城市', '备注', '项目标签', '校区', '行为', 'row_id']
-
-def reset_excel_file():
-    wb = Workbook()
-    ws = wb.active
-    ws.append(EXCEL_HEADERS)
-    wb.save(EXCEL_FILE)
+MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
 
 
-def save_to_excel(row_data):
-    with EXCEL_LOCK:
-        if os.path.exists(EXCEL_FILE):
-            wb = load_workbook(EXCEL_FILE)
-            ws = wb.active
-            first_row = [ws.cell(row=1, column=col).value for col in range(1, len(EXCEL_HEADERS) + 1)]
-            if first_row != EXCEL_HEADERS:
-                ws.insert_rows(1)
-                for col, h in enumerate(EXCEL_HEADERS, 1):
-                    ws.cell(row=1, column=col, value=h)
-        else:
-            reset_excel_file()
-            wb = load_workbook(EXCEL_FILE)
-            ws = wb.active
-
-        row_values = [row_data.get(h, '') for h in EXCEL_HEADERS]
-        ws.append(row_values)
-        wb.save(EXCEL_FILE)
-    return True
+def is_valid_cn_mobile(mobile):
+    return bool(MOBILE_RE.fullmatch((mobile or "").strip()))
 
 def load_config():
     defaults = {
@@ -241,6 +215,23 @@ PROJECT_TAG_RULES = {
             "singleChoice": 0,
         },
     },
+    "ESG": {
+        "kind": "hardcoded",
+        "tags_infos": [
+            {
+                "tagCode": 12308034,
+                "tagName": "咨询意向-金融",
+                "checkStatus": True,
+                "typeId": 12308,
+                "singleChoice": 0,
+                "obTagsValueCheckedList": [
+                    {"id": 5067, "objectId": None, "tagsId": 12308034,
+                     "tagsValueCode": 5067, "tagsValueName": "ESG意向",
+                     "checkStatus": True}
+                ],
+            }
+        ],
+    },
     "证券从业": {
         "kind": "hardcoded",
         "tags_infos": [
@@ -361,6 +352,34 @@ PROJECT_TAG_RULES = {
         ],
     },
 }
+
+
+def load_frontend_project_tags():
+    tag_map = load_project_tags()
+    for project, rule in PROJECT_TAG_RULES.items():
+        if rule.get("kind") != "hardcoded":
+            continue
+        values = []
+        for tag_info in rule.get("tags_infos") or []:
+            for checked in tag_info.get("obTagsValueCheckedList") or []:
+                value_name = (checked.get("tagsValueName") or "").strip()
+                if value_name and value_name not in values:
+                    values.append(value_name)
+        if not values:
+            continue
+        display_value = "、".join(values)
+        tag_map.setdefault(project, [])
+        if display_value not in tag_map[project]:
+            tag_map[project].insert(0, display_value)
+    return tag_map
+
+
+def load_project_tag_defaults():
+    defaults = {}
+    for project, tags in load_frontend_project_tags().items():
+        if len(tags) == 1:
+            defaults[project] = tags[0]
+    return defaults
 
 
 def parse_cookie_string(cookie_str):
@@ -1222,6 +1241,7 @@ let CLUE_OPTIONS = [];
 let CLUE_MAP = {};
 let SOURCE_OPTIONS = [];
 let PROJECT_TAG_MAP = {};
+let PROJECT_TAG_DEFAULTS = {};
 let PROVINCE_CITY_MAP = {};
 let rowCount = 0;
 let config = { name: '' };
@@ -1356,6 +1376,7 @@ window.onload = () => {
       CLUE_MAP = opts.clue_map || {};
       SOURCE_OPTIONS = opts.source_options || [];
       PROJECT_TAG_MAP = opts.project_tag_map || {};
+      PROJECT_TAG_DEFAULTS = opts.project_tag_defaults || {};
       PROVINCE_CITY_MAP = opts.province_city_map || {};
 
       buildDatalists();
@@ -1661,6 +1682,11 @@ function updateTagField(projectInput) {
   if (tags && tags.length > 0) {
     tagInput.setAttribute('list', 'tag-list-' + project);
     tagInput.placeholder = '输入或选择标签';
+    const defaultTag = PROJECT_TAG_DEFAULTS[project] || '';
+    if (defaultTag && (!tagInput.value.trim() || !tags.includes(tagInput.value.trim()))) {
+      tagInput.value = defaultTag;
+      setFieldText(tagInput, defaultTag);
+    }
   } else {
     tagInput.removeAttribute('list');
     tagInput.placeholder = '标签';
@@ -2015,6 +2041,10 @@ function getRowData(id) {
   return data;
 }
 
+function isValidCnMobile(mobile) {
+  return /^1[3-9]\d{9}$/.test((mobile || '').trim());
+}
+
 function setStatus(id, type, text) {
   const el = document.getElementById('status-' + id);
   el.className = 'status-badge status-' + type;
@@ -2029,6 +2059,10 @@ function triggerRow(id) {
   const missing = required.filter(f => !data[f] || !data[f].trim());
   if (missing.length > 0) {
     toast('请填写：' + missing.join('、'), 'error');
+    return;
+  }
+  if (!isValidCnMobile(data['电话'])) {
+    toast('电话格式不正确，请填写 11 位国内手机号', 'error');
     return;
   }
   const tagRequiredProjects = Object.keys(PROJECT_TAG_MAP);
@@ -2073,7 +2107,7 @@ function triggerRow(id) {
       btn.classList.add('done');
       btn.textContent = '✓ 已完成';
       if (row) row.classList.add('completed-row');
-      toast(`第${getRowNum(id)}行 - 已保存到 Excel，并已提交表单`, 'success');
+      toast(`第${getRowNum(id)}行 - 已提交表单`, 'success');
       const resultTa = document.getElementById('result-text-' + id);
       if (resultTa) resultTa.value = res.display_text || '';
       saveRowsToStorage();
@@ -2138,7 +2172,8 @@ def get_options():
         "campus_map": campus_map,
         "clue_options": clue_options,
         "clue_map": clue_map,
-        "project_tag_map": load_project_tags(),
+        "project_tag_map": load_frontend_project_tags(),
+        "project_tag_defaults": load_project_tag_defaults(),
         "emergency_contacts": load_emergency_contacts(),
         "source_options": ['400', '美团', '知了', '高德'],
         "province_city_map": PROVINCE_CITY_MAP
@@ -2189,10 +2224,14 @@ def trigger():
 @app.route('/save_excel', methods=['POST'])
 def save_excel():
     row_data = normalize_row_data(request.json)
+    if not is_valid_cn_mobile(row_data.get("电话")):
+        return jsonify({
+            "success": False,
+            "error": "电话格式不正确，请填写 11 位国内手机号"
+        }), 400
     config = load_config()
     config["name"] = (row_data.get("_config_name") or config.get("name") or "闫伟杰").strip()
     try:
-        save_to_excel(row_data)
         submit_result = submit_gaodun(row_data, config)
         return jsonify({
             "success": True,
@@ -2204,7 +2243,6 @@ def save_excel():
 
 
 if __name__ == '__main__':
-    reset_excel_file()
     print("=" * 50)
     print("  客服记录台 已启动")
     print("  本机访问: http://127.0.0.1:5000")
