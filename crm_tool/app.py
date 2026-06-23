@@ -34,7 +34,7 @@ def require_auth():
     return Response(
         "需要访问密码",
         401,
-        {"WWW-Authenticate": 'Basic realm="客服记录台"'}
+        {"WWW-Authenticate": 'Basic realm="Customer Service Recorder"'}
     )
 
 def reset_excel_file():
