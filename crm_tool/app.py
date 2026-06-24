@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import requests
 import json
 import os
@@ -13,6 +13,8 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 app = Flask(__name__)
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
+AUTH_TOKEN_HELP_FILE = os.path.join(BASE_DIR, 'auth_token_guide.md')
+AUTH_TOKEN_HELP_IMAGE_DIR = os.path.join(BASE_DIR, 'guide_images')
 MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
 
 
@@ -431,9 +433,7 @@ def _gaodun_post(path, payload, auth_token, cookies):
 
 
 def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=1.5):
-    auth_token = (os.environ.get("GAODUN_AUTH_TOKEN") or "").strip()
-    if not auth_token and config:
-        auth_token = (config.get("auth_token") or "").strip()
+    auth_token = ((config or {}).get("auth_token") or "").strip()
     if not auth_token:
         return "查不到"
 
@@ -636,12 +636,10 @@ def build_submit_display_text(row_data, follow_records, config=None):
 
 
 def submit_gaodun(row_data, config):
-    auth_token = (os.environ.get("GAODUN_AUTH_TOKEN") or "").strip()
-    if not auth_token:
-        auth_token = (config.get("auth_token") or "").strip()
+    auth_token = (config.get("auth_token") or "").strip()
     cookie_text = (config.get("cookie") or "").strip()
     if not auth_token:
-        raise ValueError("请先在 .env 中配置 GAODUN_AUTH_TOKEN")
+        raise ValueError("请先在右上角「配置」中填写你自己的 Auth Token")
 
     cookies = parse_cookie_string(cookie_text)
     source = (row_data.get("来源") or "").strip()
@@ -1149,6 +1147,51 @@ HTML = r"""<!DOCTYPE html>
   .form-group label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
   .form-group input, .form-group textarea { width: 100%; }
   .form-group textarea { min-height: 86px; max-height: 140px; resize: vertical; }
+  .field-label-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .field-label-row label { margin-bottom: 0; }
+  .help-link {
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
+  }
+  .help-link:hover { text-decoration: underline; }
+  .help-modal { width: 680px; max-height: 85vh; display: flex; flex-direction: column; }
+  .markdown-body {
+    overflow-y: auto;
+    padding: 4px 2px;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.75;
+  }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+    margin: 18px 0 8px;
+    line-height: 1.35;
+  }
+  .markdown-body h1 { font-size: 21px; }
+  .markdown-body h2 { font-size: 18px; }
+  .markdown-body h3 { font-size: 15px; }
+  .markdown-body p { color: var(--text); font-size: 14px; margin: 8px 0; }
+  .markdown-body ul, .markdown-body ol { padding-left: 24px; margin: 8px 0; }
+  .markdown-body pre {
+    overflow-x: auto;
+    padding: 12px;
+    border-radius: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    white-space: pre-wrap;
+  }
+  .markdown-body .guide-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 14px auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+  }
 
   .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
 
@@ -1218,14 +1261,32 @@ HTML = r"""<!DOCTYPE html>
 <div class="modal-overlay" id="config-modal">
   <div class="modal">
     <h2>⚙ 提交配置</h2>
-    <p>填写提交文案中使用的姓名。</p>
+    <p>每位同事请填写自己的姓名和高顿登录凭证，配置仅保存在当前浏览器。</p>
     <div class="form-group">
       <label>姓名</label>
       <input type="text" id="cfg-name" placeholder="闫伟杰">
     </div>
+    <div class="form-group">
+      <div class="field-label-row">
+        <label>Auth Token</label>
+        <button type="button" class="help-link" onclick="openAuthTokenHelp()">查询方法</button>
+      </div>
+      <textarea id="cfg-auth-token" placeholder="粘贴自己的 Authentication / Auth Token"></textarea>
+    </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeConfig()">取消</button>
       <button class="btn btn-primary" onclick="saveConfig()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auth Token Help Modal -->
+<div class="modal-overlay" id="auth-token-help-modal">
+  <div class="modal help-modal">
+    <h2>Auth Token 查询方法</h2>
+    <div class="markdown-body" id="auth-token-help-content">正在加载...</div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeAuthTokenHelp()">返回配置</button>
     </div>
   </div>
 </div>
@@ -1244,7 +1305,7 @@ let PROJECT_TAG_MAP = {};
 let PROJECT_TAG_DEFAULTS = {};
 let PROVINCE_CITY_MAP = {};
 let rowCount = 0;
-let config = { name: '' };
+let config = { name: '', auth_token: '' };
 const DEFAULT_400_CAMPUS = '高顿网校 SEO';
 
 // ── Init ────────────────────────────────────────────────
@@ -1364,6 +1425,35 @@ function syncProvinceFromCity(cityInput) {
   return true;
 }
 
+function validateDatalistInput(input) {
+  if (!input || !input.hasAttribute('list') || input.value === '') return true;
+
+  const datalist = document.getElementById(input.getAttribute('list'));
+  if (!datalist) return true;
+
+  const optionValues = Array.from(datalist.options, option => option.value);
+  let isValid = optionValues.includes(input.value);
+
+  // 校区选中后会根据来源显示为“来源-校区”，仍视为有效下拉选项。
+  if (!isValid && input.dataset.field === '校区') {
+    const rawCampus = input.dataset.rawCampus || '';
+    isValid = !!rawCampus
+      && optionValues.includes(rawCampus)
+      && input.value.endsWith('-' + rawCampus);
+  }
+
+  if (isValid) return true;
+
+  input.value = '';
+  if (input.dataset.field === '校区') {
+    input.dataset.rawCampus = '';
+  }
+  setFieldText(input, '');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return false;
+}
+
 window.onload = () => {
   loadConfig();
   fetch('/get_options')
@@ -1407,6 +1497,13 @@ window.onload = () => {
         }
       });
 
+      document.getElementById('table-body').addEventListener('focusout', function(e) {
+        const input = e.target;
+        if (input.tagName === 'INPUT' && input.hasAttribute('list')) {
+          validateDatalistInput(input);
+        }
+      });
+
       document.getElementById('table-body').addEventListener('mousedown', function(e) {
         const input = e.target;
         if (input.tagName !== 'INPUT' || !input.hasAttribute('list')) return;
@@ -1439,12 +1536,15 @@ function loadConfig() {
     .then(d => {
       config = d;
       config.name = localStorage.getItem('crm_config_name') || d.name || '';
+      config.auth_token = localStorage.getItem('crm_auth_token') || '';
       document.getElementById('cfg-name').value = config.name || '';
+      document.getElementById('cfg-auth-token').value = config.auth_token || '';
     });
 }
 
 function openConfig() {
   document.getElementById('cfg-name').value = config.name || '';
+  document.getElementById('cfg-auth-token').value = config.auth_token || '';
   document.getElementById('config-modal').classList.add('show');
 }
 
@@ -1452,10 +1552,121 @@ function closeConfig() {
   document.getElementById('config-modal').classList.remove('show');
 }
 
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[char]);
+}
+
+function renderMarkdown(markdown) {
+  const lines = (markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let inCode = false;
+  let listType = '';
+
+  function closeList() {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = '';
+    }
+  }
+
+  function inline(text) {
+    return escapeHtml(text)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  }
+
+  lines.forEach(line => {
+    if (line.trim().startsWith('```')) {
+      closeList();
+      html.push(inCode ? '</code></pre>' : '<pre><code>');
+      inCode = !inCode;
+      return;
+    }
+    if (inCode) {
+      html.push(escapeHtml(line) + '\n');
+      return;
+    }
+
+    const image = line.match(/^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$/);
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (image) {
+      closeList();
+      const imagePath = image[2].trim().replace(/\\/g, '/');
+      if (/^guide_images\/[^?#]+$/i.test(imagePath) && !imagePath.includes('..')) {
+        const relativePath = imagePath.slice('guide_images/'.length);
+        const imageUrl = '/auth_token_help_image/' + relativePath
+          .split('/')
+          .map(encodeURIComponent)
+          .join('/');
+        html.push(
+          `<img class="guide-image" src="${imageUrl}" alt="${escapeHtml(image[1])}" loading="lazy">`
+        );
+      } else {
+        html.push('<p>图片路径无效，请使用 guide_images/图片文件名</p>');
+      }
+    } else if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else if (unordered || ordered) {
+      const nextListType = unordered ? 'ul' : 'ol';
+      if (listType !== nextListType) {
+        closeList();
+        listType = nextListType;
+        html.push(`<${listType}>`);
+      }
+      html.push(`<li>${inline((unordered || ordered)[1])}</li>`);
+    } else if (!line.trim()) {
+      closeList();
+    } else {
+      closeList();
+      html.push(`<p>${inline(line)}</p>`);
+    }
+  });
+  closeList();
+  if (inCode) html.push('</code></pre>');
+  return html.join('');
+}
+
+function openAuthTokenHelp() {
+  document.getElementById('config-modal').classList.remove('show');
+  const modal = document.getElementById('auth-token-help-modal');
+  const content = document.getElementById('auth-token-help-content');
+  content.textContent = '正在加载...';
+  modal.classList.add('show');
+
+  fetch('/auth_token_help')
+    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) throw new Error(data.error || '指引加载失败');
+      content.innerHTML = renderMarkdown(data.content);
+    })
+    .catch(err => {
+      content.textContent = err.message;
+    });
+}
+
+function closeAuthTokenHelp() {
+  document.getElementById('auth-token-help-modal').classList.remove('show');
+  openConfig();
+}
+
 function saveConfig() {
   const name = document.getElementById('cfg-name').value.trim();
+  const authToken = document.getElementById('cfg-auth-token').value.trim();
   config.name = name;
+  config.auth_token = authToken;
   localStorage.setItem('crm_config_name', name);
+  localStorage.setItem('crm_auth_token', authToken);
+  localStorage.removeItem('crm_cookie');
   closeConfig();
   toast('配置已保存', 'success');
 }
@@ -1836,6 +2047,7 @@ function addRow() {
 function deleteRow(id) {
   const tr = document.getElementById('row-' + id);
   const resultTr = document.getElementById('result-row-' + id);
+  if (!tr || !confirm(`确认删除第 ${getRowNum(id)} 条记录吗？`)) return;
   if (tr) {
     tr.style.animation = 'none';
     tr.style.opacity = '0';
@@ -2054,6 +2266,12 @@ function setStatus(id, type, text) {
 function triggerRow(id) {
   const data = getRowData(id);
 
+  if (!config.auth_token || !config.auth_token.trim()) {
+    toast('请先在右上角「配置」中填写你自己的 Auth Token', 'error');
+    openConfig();
+    return;
+  }
+
   // Validate required fields
   const required = ['来源', '项目', '电话', '省', '城市', '备注', '行为'];
   const missing = required.filter(f => !data[f] || !data[f].trim());
@@ -2086,6 +2304,7 @@ function triggerRow(id) {
 
   data['row_id'] = String(id);
   data['_config_name'] = config.name || '';
+  data['_auth_token'] = config.auth_token || '';
 
   const btn = document.getElementById('trigger-btn-' + id);
   const row = document.getElementById('row-' + id);
@@ -2147,6 +2366,9 @@ function toast(msg, type = 'info') {
 document.getElementById('config-modal').addEventListener('click', function(e) {
   if (e.target === this) closeConfig();
 });
+document.getElementById('auth-token-help-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeAuthTokenHelp();
+});
 </script>
 </body>
 </html>"""
@@ -2159,7 +2381,29 @@ def index():
 
 @app.route('/get_config')
 def get_config():
-    return jsonify(load_config())
+    config = load_config()
+    return jsonify({
+        "name": config.get("name", ""),
+        "yingdao_url": config.get("yingdao_url", ""),
+    })
+
+
+@app.route('/auth_token_help')
+def auth_token_help():
+    try:
+        with open(AUTH_TOKEN_HELP_FILE, 'r', encoding='utf-8') as f:
+            return jsonify({"content": f.read()})
+    except FileNotFoundError:
+        return jsonify({
+            "error": f"未找到指引文件：{os.path.basename(AUTH_TOKEN_HELP_FILE)}"
+        }), 404
+    except Exception as e:
+        return jsonify({"error": f"读取指引失败：{e}"}), 500
+
+
+@app.route('/auth_token_help_image/<path:filename>')
+def auth_token_help_image(filename):
+    return send_from_directory(AUTH_TOKEN_HELP_IMAGE_DIR, filename)
 
 
 @app.route('/get_options')
@@ -2231,6 +2475,8 @@ def save_excel():
         }), 400
     config = load_config()
     config["name"] = (row_data.get("_config_name") or config.get("name") or "闫伟杰").strip()
+    config["auth_token"] = (row_data.get("_auth_token") or "").strip()
+    config["cookie"] = ""
     try:
         submit_result = submit_gaodun(row_data, config)
         return jsonify({
