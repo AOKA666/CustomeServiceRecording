@@ -3,6 +3,7 @@ import requests
 import json
 import os
 import re
+import threading
 import time
 from dotenv import load_dotenv
 from openpyxl import load_workbook
@@ -16,6 +17,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 AUTH_TOKEN_HELP_FILE = os.path.join(BASE_DIR, 'auth_token_guide.md')
 AUTH_TOKEN_HELP_IMAGE_DIR = os.path.join(BASE_DIR, 'guide_images')
 MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
+_400_SUBMIT_LOCK = threading.Lock()
 
 
 def is_valid_cn_mobile(mobile):
@@ -457,13 +459,34 @@ def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=
 
         result_list = ((data.get("result") or {}).get("list") or [])
         matched = None
-        if len(result_list) > 1:
-            for item in result_list:
-                if (item.get("intentProjectName") or "").strip() == project:
-                    matched = item
-                    break
-        elif result_list:
-            matched = result_list[0]
+
+        # The CRM quick-search endpoint can briefly return stale/fuzzy results
+        # after concurrent submissions. Never select another request merely
+        # because it is the only result or has the same project.
+        exact_mobile_matches = []
+        results_without_mobile = []
+        for item in result_list:
+            item_mobiles = {
+                str(item.get(key) or "").strip()
+                for key in ("mobile", "phone", "telPhone", "contactMobile")
+                if item.get(key)
+            }
+            if mobile in item_mobiles:
+                exact_mobile_matches.append(item)
+            elif not item_mobiles:
+                results_without_mobile.append(item)
+
+        candidates = exact_mobile_matches
+        if not candidates and len(result_list) == 1 and results_without_mobile:
+            # Some CRM permissions omit the mobile field from search results.
+            candidates = results_without_mobile
+
+        for item in candidates:
+            if (item.get("intentProjectName") or "").strip() == project:
+                matched = item
+                break
+        if matched is None and len(candidates) == 1:
+            matched = candidates[0]
 
         if matched is not None:
             owner_name = matched.get("ownerName") or ""
@@ -2478,7 +2501,14 @@ def save_excel():
     config["auth_token"] = (row_data.get("_auth_token") or "").strip()
     config["cookie"] = ""
     try:
-        submit_result = submit_gaodun(row_data, config)
+        if (row_data.get("来源") or "").strip() == "400":
+            # CRM assignment/search is eventually consistent. Keep the full
+            # submit -> assignment wait -> teacher lookup flow atomic so that
+            # concurrent 400 calls cannot consume each other's search result.
+            with _400_SUBMIT_LOCK:
+                submit_result = submit_gaodun(row_data, config)
+        else:
+            submit_result = submit_gaodun(row_data, config)
         return jsonify({
             "success": True,
             "submit": submit_result["response"],
