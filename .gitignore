@@ -5,8 +5,6 @@ __pycache__/
 *.py[cod]
 
 # Local secrets/config
-.env
-crm_tool/config.json
 
 # Local data files
 紧急联系人.xlsx

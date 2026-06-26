@@ -10,7 +10,7 @@
 - 输入城市后自动匹配省份
 - `400` 来源自动使用默认校区：`高顿网校 SEO`
 - 点击“保存”后提交到 CRM
-- 支持配置 CRM 所需的 `auth_token`、`cookie` 和影刀触发 URL
+- 右上角“配置”中填写姓名和高顿 Auth Token（每位同事填自己的，存浏览器本地）
 
 ## 目录结构
 
@@ -18,8 +18,7 @@
 .
 ├── crm_tool/
 │   ├── app.py          # Flask 主程序，包含页面、接口和 CRM 提交流程
-│   ├── start.bat       # Windows 启动脚本
-│   └── config.json     # 本地配置文件，不建议同步
+│   └── start.bat       # Windows 启动脚本
 ├── 校区.txt             # 校区、省、市映射数据
 ├── 线索宝.txt           # 来源/线索相关映射数据
 ├── 项目分类.txt         # 项目候选项
@@ -96,17 +95,10 @@ pip install flask requests openpyxl
 
 页面右上角“配置”中填写：
 
-- 影刀触发 URL
-- CRM `auth_token`
-- CRM `cookie`
+- 自己的姓名
+- 自己的高顿 Auth Token（自动展示剩余有效期，过期会红字提示）
 
-配置会保存到：
-
-```text
-crm_tool/config.json
-```
-
-该文件包含本机登录信息，不应提交到 Git。
+这两项只保存在当前浏览器的 localStorage（键名 `crm_config_name` / `crm_auth_token`），换浏览器或换电脑要重新填。
 
 ## 数据文件说明
 
@@ -123,21 +115,11 @@ crm_tool/config.json
 infol.xlsx
 __pycache__/
 *.py[cod]
-crm_tool/config.json
 紧急联系人.xlsx
 ```
 
 ## 注意事项
 
 - 如果修改了 `app.py`，需要重启 `start.bat` 才能加载新代码。
-- 不要把 `auth_token`、`cookie` 或联系人数据提交到公开仓库。
-
-## 当前配置方式
-
-右上角“配置”现在只填写“姓名”。姓名保存在每个同事自己的浏览器里，用于替换提交文案中的固定姓名。
-
-高顿 token 不再通过页面填写，统一写在项目根目录 `.env`：
-
-```text
-GAODUN_AUTH_TOKEN=Basic xxx
-```
+- Auth Token 仅存在浏览器 localStorage，换浏览器/无痕模式会丢失，需要重新粘贴。
+- 联系人 Excel 不要提交到公开仓库。

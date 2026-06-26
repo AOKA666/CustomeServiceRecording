@@ -5,15 +5,12 @@ import os
 import re
 import threading
 import time
-from dotenv import load_dotenv
 from openpyxl import load_workbook
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
 
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 AUTH_TOKEN_HELP_FILE = os.path.join(BASE_DIR, 'auth_token_guide.md')
 AUTH_TOKEN_HELP_IMAGE_DIR = os.path.join(BASE_DIR, 'guide_images')
 MOBILE_RE = re.compile(r"^1[3-9]\d{9}$")
@@ -22,19 +19,6 @@ _400_SUBMIT_LOCK = threading.Lock()
 
 def is_valid_cn_mobile(mobile):
     return bool(MOBILE_RE.fullmatch((mobile or "").strip()))
-
-def load_config():
-    defaults = {
-        "yingdao_url": "http://127.0.0.1:9333/api/v1/robots/YOUR_ROBOT_ID/run",
-        "cookie": ""
-    }
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for k, v in defaults.items():
-            data.setdefault(k, v)
-        return data
-    return defaults
 
 def load_project_options():
     path = os.path.join(BASE_DIR, '项目分类.txt')
@@ -434,6 +418,52 @@ def _gaodun_post(path, payload, auth_token, cookies):
     return resp.json()
 
 
+def _extract_clue_mobiles(item):
+    """Collect every mobile-like string the CRM may return for a clue row.
+
+    The quick-search payload exposes top-level ``mobile / phone /
+    telPhone / contactMobile`` only when the caller has the right
+    permissions. In practice the actual phone lives under
+    ``contactWay.mobile[*].contactNo`` or ``contactWay.mobile[*].maskCode``
+    (a masked display like ``156****8999``), so callers that only look
+    at the top-level fields end up matching zero records.
+    """
+    mobiles = set()
+    for key in ("mobile", "phone", "telPhone", "contactMobile"):
+        v = item.get(key)
+        if v:
+            mobiles.add(str(v).strip())
+    cw = item.get("contactWay") or {}
+    if isinstance(cw, dict):
+        for m in (cw.get("mobile") or []):
+            if not isinstance(m, dict):
+                continue
+            for k in ("contactNo", "maskCode"):
+                v = m.get(k)
+                if v:
+                    mobiles.add(str(v).strip())
+    return {x for x in mobiles if x}
+
+
+def _clue_matches_mobile(mobile, item):
+    """Return True if ``item`` corresponds to the queried mobile.
+
+    Exact full-number matches win immediately. When the only phone data
+    available is the masked display (e.g. ``156****8999``), match on the
+    first-three + last-four digit pattern instead so that records whose
+    top-level mobile fields are null can still be associated.
+    """
+    candidates = _extract_clue_mobiles(item)
+    if mobile in candidates:
+        return True
+    if len(mobile) == 11:
+        prefix, suffix = mobile[:3], mobile[-4:]
+        for cand in candidates:
+            if "*" in cand and len(cand) == 11 and cand[:3] == prefix and cand[-4:] == suffix:
+                return True
+    return False
+
+
 def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=1.5):
     auth_token = ((config or {}).get("auth_token") or "").strip()
     if not auth_token:
@@ -457,7 +487,14 @@ def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=
             print(f"查询老师失败: {e}", flush=True)
             data = {}
 
-        result_list = ((data.get("result") or {}).get("list") or [])
+        # CRM may return `result` as a string (e.g. "Unable to verify token")
+        # or null when the auth_token is expired; coerce non-dict shapes so
+        # the rest of the function falls into the existing "no match" path
+        # instead of raising AttributeError.
+        inner = data.get("result")
+        if not isinstance(inner, dict):
+            inner = {}
+        result_list = inner.get("list") or []
         matched = None
 
         # The CRM quick-search endpoint can briefly return stale/fuzzy results
@@ -466,14 +503,9 @@ def lookup_teacher_name(mobile, project, config=None, attempts=4, delay_seconds=
         exact_mobile_matches = []
         results_without_mobile = []
         for item in result_list:
-            item_mobiles = {
-                str(item.get(key) or "").strip()
-                for key in ("mobile", "phone", "telPhone", "contactMobile")
-                if item.get(key)
-            }
-            if mobile in item_mobiles:
+            if _clue_matches_mobile(mobile, item):
                 exact_mobile_matches.append(item)
-            elif not item_mobiles:
+            elif not _extract_clue_mobiles(item):
                 results_without_mobile.append(item)
 
         candidates = exact_mobile_matches
@@ -869,7 +901,7 @@ HTML = r"""<!DOCTYPE html>
   }
   .btn-danger-ghost:hover { background: var(--danger-bg); border-color: var(--danger); }
 
-  .btn-trigger {
+  .btn-submit {
     background: var(--surface2);
     color: var(--success);
     border: 1px solid rgba(52,211,153,0.25);
@@ -877,18 +909,18 @@ HTML = r"""<!DOCTYPE html>
     font-size: 13px;
     border-radius: 5px;
   }
-  .btn-trigger:hover {
+  .btn-submit:hover {
     background: var(--success-bg);
     border-color: var(--success);
     transform: translateY(-1px);
   }
-  .btn-trigger:active { transform: translateY(0); }
-  .btn-trigger.loading {
+  .btn-submit:active { transform: translateY(0); }
+  .btn-submit.loading {
     opacity: 0.6;
     cursor: not-allowed;
     pointer-events: none;
   }
-  .btn-trigger.done {
+  .btn-submit.done {
     color: #64748b;
     border-color: transparent;
     background: transparent;
@@ -1182,6 +1214,20 @@ HTML = r"""<!DOCTYPE html>
   }
   .help-link:hover { text-decoration: underline; }
   .help-modal { width: 680px; max-height: 85vh; display: flex; flex-direction: column; }
+
+  /* Auth token expiration indicator */
+  .token-status {
+    display: none;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .token-status.show { display: block; }
+  .token-status.ok    { background: var(--success-bg); color: var(--success); }
+  .token-status.warn  { background: rgba(251,191,36,0.12); color: var(--warning); }
+  .token-status.bad   { background: var(--danger-bg);  color: var(--danger); }
   .markdown-body {
     overflow-y: auto;
     padding: 4px 2px;
@@ -1295,6 +1341,7 @@ HTML = r"""<!DOCTYPE html>
         <button type="button" class="help-link" onclick="openAuthTokenHelp()">查询方法</button>
       </div>
       <textarea id="cfg-auth-token" placeholder="粘贴自己的 Authentication / Auth Token"></textarea>
+      <div id="auth-token-status" class="token-status" aria-live="polite"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeConfig()">取消</button>
@@ -1554,21 +1601,101 @@ window.onload = () => {
 
 // ── Config ──────────────────────────────────────────────
 function loadConfig() {
-  fetch('/get_config')
-    .then(r => r.json())
-    .then(d => {
-      config = d;
-      config.name = localStorage.getItem('crm_config_name') || d.name || '';
-      config.auth_token = localStorage.getItem('crm_auth_token') || '';
-      document.getElementById('cfg-name').value = config.name || '';
-      document.getElementById('cfg-auth-token').value = config.auth_token || '';
-    });
+  // The auth_token / name live entirely in localStorage now; no backend
+  // round-trip is needed. If localStorage is empty the user will be
+  // prompted to fill them in on first submission instead.
+  config.name = localStorage.getItem('crm_config_name') || '';
+  config.auth_token = localStorage.getItem('crm_auth_token') || '';
+  document.getElementById('cfg-name').value = config.name || '';
+  document.getElementById('cfg-auth-token').value = config.auth_token || '';
+  checkTokenOnLoad();
+}
+
+// Surface a one-time toast if the saved token is already expired or about
+// to expire, so the user finds out before submitting a form rather than
+// after it fails. Suppressed when the token field is empty or unparseable
+// (those cases are handled inside the config modal instead).
+function checkTokenOnLoad() {
+  const raw = (config && config.auth_token || '').trim();
+  if (!raw) return;
+  const payload = decodeJwt(raw);
+  if (!payload || typeof payload.exp !== 'number') return;
+  const remaining = payload.exp - Math.floor(Date.now() / 1000);
+  if (remaining <= 0) {
+    toast('当前 Auth Token 已过期，请打开「配置」重新粘贴', 'error');
+  } else if (remaining <= 24 * 3600) {
+    toast(`当前 Auth Token 即将过期（还剩 ${formatRemaining(remaining)}），建议尽快更换`, 'error');
+  }
 }
 
 function openConfig() {
   document.getElementById('cfg-name').value = config.name || '';
   document.getElementById('cfg-auth-token').value = config.auth_token || '';
   document.getElementById('config-modal').classList.add('show');
+  renderAuthTokenStatus();
+}
+
+// Decode a JWT and return its payload, or null if unparseable.
+function decodeJwt(token) {
+  if (!token) return null;
+  const stripped = String(token).replace(/^Basic\s+/i, '').trim();
+  const parts = stripped.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const padded = parts[1] + '='.repeat((4 - parts[1].length % 4) % 4);
+    const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(b64));
+  } catch (e) {
+    return null;
+  }
+}
+
+function formatRemaining(seconds) {
+  const abs = Math.abs(seconds);
+  if (abs < 60) return `${abs} 秒`;
+  if (abs < 3600) return `${Math.round(abs / 60)} 分钟`;
+  if (abs < 86400) return `${Math.round(abs / 3600)} 小时`;
+  return `${Math.round(abs / 86400)} 天`;
+}
+
+function formatTokenDate(unixSeconds) {
+  const d = new Date(unixSeconds * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Render the expiration hint under the auth_token textarea. Reads the
+// currently-typed value so the indicator updates live as the user pastes.
+function renderAuthTokenStatus() {
+  const el = document.getElementById('auth-token-status');
+  if (!el) return;
+  const raw = document.getElementById('cfg-auth-token').value.trim();
+  if (!raw) {
+    el.className = 'token-status';
+    el.textContent = '';
+    return;
+  }
+  const payload = decodeJwt(raw);
+  if (!payload || typeof payload.exp !== 'number') {
+    el.className = 'token-status bad show';
+    el.textContent = '✕ 无法解析此 Token 的过期时间，请确认是否完整粘贴（含 Basic 前缀）';
+    return;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const remaining = payload.exp - nowSec;
+  const expText = formatTokenDate(payload.exp);
+  // Server-issued tokens are valid for exactly 7 days, so the only
+  // meaningful thresholds are "expired / about to expire / fresh".
+  if (remaining <= 0) {
+    el.className = 'token-status bad show';
+    el.innerHTML = `✕ Token 已过期 ${formatRemaining(remaining)}，已于 ${expText} 到期，请重新抓取`;
+  } else if (remaining <= 24 * 3600) {
+    el.className = 'token-status warn show';
+    el.innerHTML = `⚠ Token 即将过期，还剩 ${formatRemaining(remaining)}（${expText} 到期），建议尽快更换`;
+  } else {
+    el.className = 'token-status ok show';
+    el.innerHTML = `✓ Token 有效期至 ${expText}（还剩 ${formatRemaining(remaining)}）`;
+  }
 }
 
 function closeConfig() {
@@ -1689,7 +1816,6 @@ function saveConfig() {
   config.auth_token = authToken;
   localStorage.setItem('crm_config_name', name);
   localStorage.setItem('crm_auth_token', authToken);
-  localStorage.removeItem('crm_cookie');
   closeConfig();
   toast('配置已保存', 'success');
 }
@@ -2031,12 +2157,12 @@ function addRow() {
     <td data-field="行为"><input type="text" placeholder="行为" data-field="行为" value="网络营销/来电" readonly></td>
     <td>
       <span class="status-badge status-idle" id="status-${id}">
-        <span class="status-dot"></span>待触发
+        <span class="status-dot"></span>待保存
       </span>
     </td>
     <td style="padding:5px 4px;">
       <div style="display:flex; gap:4px; align-items:center; justify-content:center; height:100%;">
-        <button class="btn btn-trigger" onclick="triggerRow(${id})" id="trigger-btn-${id}">
+        <button class="btn btn-submit" onclick="submitRow(${id})" id="submit-btn-${id}">
           ▶ 保存
         </button>
         <button class="btn btn-danger-ghost" onclick="deleteRow(${id})" style="padding:4px 6px; font-size:13px;">✕</button>
@@ -2130,7 +2256,7 @@ function saveRowsToStorage() {
     const sourceTd = tr.querySelector('td[data-field="来源"]');
     data._sourceCorner = !!(sourceTd && sourceTd.classList.contains('source-corner'));
     // persist completed state
-    const btn = tr.querySelector('.btn-trigger');
+    const btn = tr.querySelector('.btn-submit');
     data._completed = btn && btn.classList.contains('done');
     const id = tr.dataset.id;
     const resultTa = document.getElementById('result-text-' + id);
@@ -2183,12 +2309,12 @@ function restoreRow(data) {
     <td data-field="行为"><input type="text" placeholder="行为" data-field="行为" value="网络营销/来电" readonly></td>
     <td>
       <span class="status-badge status-idle" id="status-${id}">
-        <span class="status-dot"></span>待触发
+        <span class="status-dot"></span>待保存
       </span>
     </td>
     <td style="padding:5px 4px;">
       <div style="display:flex; gap:4px; align-items:center; justify-content:center; height:100%;">
-        <button class="btn btn-trigger" onclick="triggerRow(${id})" id="trigger-btn-${id}">
+        <button class="btn btn-submit" onclick="submitRow(${id})" id="submit-btn-${id}">
           ▶ 保存
         </button>
         <button class="btn btn-danger-ghost" onclick="deleteRow(${id})" style="padding:4px 6px; font-size:13px;">✕</button>
@@ -2245,7 +2371,7 @@ function restoreRow(data) {
   // restore completed state
   if (data._completed) {
     tr.classList.add('completed-row');
-    const btn = tr.querySelector('.btn-trigger');
+    const btn = tr.querySelector('.btn-submit');
     if (btn) {
       btn.classList.remove('loading');
       btn.classList.add('done');
@@ -2286,7 +2412,7 @@ function setStatus(id, type, text) {
   el.innerHTML = `<span class="status-dot"></span>${text}`;
 }
 
-function triggerRow(id) {
+function submitRow(id) {
   const data = getRowData(id);
 
   if (!config.auth_token || !config.auth_token.trim()) {
@@ -2329,7 +2455,7 @@ function triggerRow(id) {
   data['_config_name'] = config.name || '';
   data['_auth_token'] = config.auth_token || '';
 
-  const btn = document.getElementById('trigger-btn-' + id);
+  const btn = document.getElementById('submit-btn-' + id);
   const row = document.getElementById('row-' + id);
   if (row) row.classList.remove('completed-row');
   btn.classList.add('loading');
@@ -2392,6 +2518,9 @@ document.getElementById('config-modal').addEventListener('click', function(e) {
 document.getElementById('auth-token-help-modal').addEventListener('click', function(e) {
   if (e.target === this) closeAuthTokenHelp();
 });
+
+// Live-refresh the token expiration hint while the user pastes/edits.
+document.getElementById('cfg-auth-token').addEventListener('input', renderAuthTokenStatus);
 </script>
 </body>
 </html>"""
@@ -2400,15 +2529,6 @@ document.getElementById('auth-token-help-modal').addEventListener('click', funct
 @app.route('/')
 def index():
     return HTML
-
-
-@app.route('/get_config')
-def get_config():
-    config = load_config()
-    return jsonify({
-        "name": config.get("name", ""),
-        "yingdao_url": config.get("yingdao_url", ""),
-    })
 
 
 @app.route('/auth_token_help')
@@ -2447,47 +2567,6 @@ def get_options():
     })
 
 
-@app.route('/save_config', methods=['POST'])
-def save_config():
-    data = load_config()
-    data.update(request.json or {})
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return jsonify({"success": True})
-
-
-@app.route('/trigger', methods=['POST'])
-def trigger():
-    row_data = request.json
-    config = load_config()
-    url = config.get('yingdao_url', '').strip()
-
-    if not url or 'YOUR_ROBOT_ID' in url:
-        return jsonify({
-            "success": False,
-            "error": "请先在右上角「⚙ 配置」中填写影刀触发URL"
-        }), 400
-
-    try:
-        resp = requests.post(
-            url,
-            json={"params": row_data},
-            timeout=15,
-            headers={"Content-Type": "application/json"}
-        )
-        resp.raise_for_status()
-        return jsonify({"success": True, "response": resp.text})
-    except requests.exceptions.ConnectionError:
-        return jsonify({
-            "success": False,
-            "error": "无法连接影刀，请确认影刀已运行且HTTP触发器已开启"
-        }), 500
-    except requests.exceptions.Timeout:
-        return jsonify({"success": False, "error": "请求超时（15s）"}), 500
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
 @app.route('/save_excel', methods=['POST'])
 def save_excel():
     row_data = normalize_row_data(request.json)
@@ -2496,10 +2575,10 @@ def save_excel():
             "success": False,
             "error": "电话格式不正确，请填写 11 位国内手机号"
         }), 400
-    config = load_config()
-    config["name"] = (row_data.get("_config_name") or config.get("name") or "闫伟杰").strip()
-    config["auth_token"] = (row_data.get("_auth_token") or "").strip()
-    config["cookie"] = ""
+    config = {
+        "name": (row_data.get("_config_name") or "闫伟杰").strip(),
+        "auth_token": (row_data.get("_auth_token") or "").strip(),
+    }
     try:
         if (row_data.get("来源") or "").strip() == "400":
             # CRM assignment/search is eventually consistent. Keep the full

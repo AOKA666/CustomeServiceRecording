@@ -11,7 +11,7 @@ if errorlevel 1 (
 )
 
 echo Installing dependencies...
-pip install flask requests openpyxl python-dotenv -q
+pip install flask requests openpyxl -q
 
 echo.
 echo ============================================
